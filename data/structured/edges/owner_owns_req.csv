@@ -1,0 +1,15 @@
+owner_id,req_id
+team-security,REQ-001
+team-payments,REQ-002
+team-risk,REQ-003
+team-payments,REQ-004
+team-billing,REQ-005
+team-security,REQ-006
+team-security,REQ-007
+team-payments,REQ-008
+team-checkout,REQ-009
+team-integrations,REQ-010
+team-integrations,REQ-011
+team-data,REQ-012
+team-security,REQ-013
+team-billing,REQ-014

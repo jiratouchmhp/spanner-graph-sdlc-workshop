@@ -1,0 +1,29 @@
+-- =============================================================================
+-- 03c_optional_reranker_model.sql.tmpl
+-- Acme Commerce Platform — Optional Cross-Encoder Reranker Model (Vertex AI)
+-- Target: Cloud Spanner Enterprise Edition | Dialect: GOOGLE_STANDARD_SQL
+--
+-- Template Variables:
+--   ${GOOGLE_CLOUD_PROJECT} -> Active GCP project ID
+--   ${VERTEX_AI_LOCATION}   -> Default: asia-southeast1 (Singapore, ~25 ms RTT
+--                              from Bangkok regional-asia-southeast3 primary)
+--   ${RERANKER_ENDPOINT_ID} -> Numeric Vertex AI deployed custom endpoint ID
+--                              (e.g., BAAI/bge-reranker-v2-m3 in asia-southeast1)
+--
+-- Note: This model is strictly optional for Lab 5 Query 4. If no custom
+-- cross-encoder endpoint is deployed, use the endpoint-free RRF fallback block
+-- in 06_hybrid_rrf_rsf_filtered.sql.
+-- =============================================================================
+
+CREATE OR REPLACE MODEL SdlcReranker
+INPUT (
+  text STRING(MAX),
+  text_pair STRING(MAX)
+)
+OUTPUT (
+  score FLOAT32
+)
+REMOTE OPTIONS (
+  endpoint = '//aiplatform.googleapis.com/projects/${GOOGLE_CLOUD_PROJECT}/locations/${VERTEX_AI_LOCATION}/endpoints/${RERANKER_ENDPOINT_ID}',
+  default_batch_size = 5
+);

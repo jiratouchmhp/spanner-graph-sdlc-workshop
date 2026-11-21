@@ -1,0 +1,11 @@
+owner_id,adr_id
+team-payments,ADR-001
+team-billing,ADR-002
+team-payments,ADR-003
+team-payments,ADR-004
+team-payments,ADR-005
+team-security,ADR-006
+team-integrations,ADR-007
+team-billing,ADR-008
+team-catalog,ADR-009
+team-payments,ADR-010

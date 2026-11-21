@@ -1,0 +1,657 @@
+# Cloud Spanner Enterprise SDLC Knowledge Graph — MCP Toolbox Configuration
+# =============================================================================
+# Schema: Verified googleapis/mcp-toolbox single-document configuration
+#         (sources, embeddingModels, authServices, tools, toolsets).
+#         Convert to flat multi-document v1 at any time with:
+#           toolbox migrate --config tools.yaml --dry-run
+#
+# Security & Architecture Invariants:
+#   1. sources.sdlc-spanner (type: spanner) uses ONLY valid keys:
+#      type, project, instance, database, dialect.
+#      (Spanner FGAC roles are enforced via Layer 2 clients such as Spanner
+#      Managed Remote MCP, Spanner SDKs, and gcloud FGAC sessions; Cloud Run MCP
+#      Toolbox enforces least privilege via Layer 1 DB-level SA IAM + sliced
+#      per-persona YAML files in personas/ + readOnly: true + OIDC authServices.)
+#   2. embeddingModels.gemini-embedder uses secretless regional Vertex AI via
+#      Application Default Credentials / Cloud Run Workload Identity in
+#      ${VERTEX_AI_LOCATION} (default: asia-southeast1, ~25 ms RTT from Bangkok;
+#      NEVER use "global" for gemini-embedding-001).
+#   3. ZERO raw SQL execution tools and ZERO dynamic template parameter blocks.
+#   4. Every read query explicitly declares readOnly: true (single-use R/O txn,
+#      required for Full-Text Search and roles/spanner.databaseReader SAs).
+#   5. Every multi-tenant team query binds @caller_email server-side via OIDC
+#      authServices (stripped from the LLM schema to fail closed on prompt injection).
+#
+# Production Deployment Note:
+#   Do NOT mount this combined master file onto a write-privileged Cloud Run
+#   service. Run `python3 solution/mcp/render_persona_tools.py` and mount the
+#   sliced per-persona files from `solution/mcp/personas/` onto separate
+#   Bangkok (asia-southeast3) Cloud Run services.
+
+sources:
+  sdlc-spanner:
+    type: spanner
+    project: ${SPANNER_PROJECT}
+    instance: ${SPANNER_INSTANCE}
+    database: ${SPANNER_DATABASE}
+    dialect: googlesql
+
+embeddingModels:
+  gemini-embedder:
+    type: gemini
+    model: gemini-embedding-001
+    project: ${GOOGLE_CLOUD_PROJECT}
+    location: ${VERTEX_AI_LOCATION}
+    dimension: 768
+    # Optional local-only fallback (non-regional Gemini Developer API;
+    # NEVER enable a static API key in production or PDPA Cloud Run deployments):
+    # apiKey: ${GOOGLE_API_KEY}
+
+authServices:
+  google-corp-oidc:
+    type: google
+    clientId: ${GOOGLE_OAUTH_CLIENT_ID}
+
+tools:
+  analyze_api_blast_radius_graphrag:
+    type: spanner-sql
+    source: sdlc-spanner
+    readOnly: true
+    description: >-
+      Computes the deterministic cycle-safe multi-hop upstream blast radius
+      (MATCH TRAIL) for a target Acme Commerce API, separating DIRECT_SYNC,
+      TRANSITIVE_UPSTREAM, and async DATA_FEED_CONSUMER services, flagging
+      deprecated legacy v1 AT_RISK callers, and attaching governing ADRs,
+      compliance requirements, and hybrid RRF (ScaNN ANN + FTS) Markdown citations.
+    statement: |
+      WITH
+        query_vec AS (
+          SELECT
+            ARRAY(
+              SELECT CAST(v AS FLOAT32)
+              FROM UNNEST(@query_embedding) AS v WITH OFFSET AS pos
+              ORDER BY pos
+            ) AS val
+        ),
+        vec_top AS (
+          SELECT
+            d.chunk_id,
+            APPROX_COSINE_DISTANCE(
+              d.embedding,
+              query_vec.val,
+              options => JSON '{"num_leaves_to_search": 10}'
+            ) AS approx_distance
+          FROM DocumentChunks AS d, query_vec
+          WHERE d.embedding IS NOT NULL
+          ORDER BY approx_distance ASC
+          LIMIT 20
+        ),
+        fts_top AS (
+          SELECT
+            chunk_id,
+            SCORE(
+              content_tokens,
+              @search_query,
+              dictionary => 'SdlcSynonymDict',
+              enhance_query => TRUE
+            ) AS fts_score
+          FROM DocumentChunks
+          WHERE SEARCH(
+            content_tokens,
+            @search_query,
+            dictionary => 'SdlcSynonymDict',
+            enhance_query => TRUE
+          )
+          ORDER BY fts_score DESC
+          LIMIT 20
+        ),
+        rrf_ranked AS (
+          SELECT
+            chunk_id,
+            SUM(1.0 / (60.0 + rank + 1.0)) AS rrf_score
+          FROM (
+            SELECT chunk_id, rank
+            FROM UNNEST(ARRAY(SELECT chunk_id FROM vec_top ORDER BY approx_distance ASC)) AS chunk_id WITH OFFSET AS rank
+            UNION ALL
+            SELECT chunk_id, rank
+            FROM UNNEST(ARRAY(SELECT chunk_id FROM fts_top ORDER BY fts_score DESC)) AS chunk_id WITH OFFSET AS rank
+          )
+          GROUP BY chunk_id
+        ),
+        raw_blast AS (
+          SELECT
+            impacted_service_id,
+            1 AS hop_distance,
+            'DIRECT_SYNC' AS impact_category,
+            1 AS impact_category_rank
+          FROM GRAPH_TABLE(SdlcGraph
+            MATCH (direct:Service)-[:CALLS_API]->(target:Api {api_id: @api_id})
+            RETURN direct.service_id AS impacted_service_id
+          )
+          UNION ALL
+          SELECT
+            impacted_service_id,
+            hop_distance,
+            IF(ARRAY_INCLUDES(dep_types, 'DATA_FEED'), 'DATA_FEED_CONSUMER', 'TRANSITIVE_UPSTREAM') AS impact_category,
+            IF(ARRAY_INCLUDES(dep_types, 'DATA_FEED'), 3, 2) AS impact_category_rank
+          FROM GRAPH_TABLE(SdlcGraph
+            MATCH TRAIL (upstream:Service)-[deps:DEPENDS_ON]->{1,3}(direct:Service)-[:CALLS_API]->(target:Api {api_id: @api_id})
+            LET dep_types = ARRAY_AGG(deps.dependency_type)
+            RETURN
+              upstream.service_id AS impacted_service_id,
+              ARRAY_LENGTH(deps) + 1 AS hop_distance,
+              dep_types
+          )
+        ),
+        dedup_blast AS (
+          SELECT
+            impacted_service_id,
+            MIN(hop_distance) AS hop_distance,
+            ARRAY_AGG(impact_category ORDER BY hop_distance ASC, impact_category_rank ASC LIMIT 1)[OFFSET(0)] AS impact_category,
+            MIN(impact_category_rank) AS impact_category_rank
+          FROM raw_blast
+          GROUP BY impacted_service_id
+        ),
+        target_adrs AS (
+          SELECT ARRAY_AGG(
+            STRUCT(d.adr_id, d.title, ag.governance_type)
+            ORDER BY d.adr_id ASC
+          ) AS governing_adrs
+          FROM AdrGovernsApi AS ag
+          JOIN Adrs AS d ON ag.adr_id = d.adr_id
+          WHERE ag.api_id = @api_id
+        ),
+        target_reqs AS (
+          SELECT ARRAY_AGG(
+            STRUCT(r.req_id, r.framework, r.severity, ra.compliance_status)
+            ORDER BY r.req_id ASC
+          ) AS applicable_requirements
+          FROM ReqAppliesToApi AS ra
+          JOIN Requirements AS r ON ra.req_id = r.req_id
+          WHERE ra.api_id = @api_id
+        ),
+        top_citations AS (
+          SELECT ARRAY_AGG(
+            STRUCT(dc.source_path, dc.section_heading, ROUND(r.rrf_score, 4) AS rrf_score)
+            ORDER BY r.rrf_score DESC, dc.source_path ASC
+            LIMIT 8
+          ) AS markdown_citations
+          FROM rrf_ranked AS r
+          JOIN DocumentChunks AS dc ON r.chunk_id = dc.chunk_id
+          WHERE EXISTS (
+            SELECT 1
+            FROM ChunkEntityMentions AS cem
+            WHERE cem.chunk_id = dc.chunk_id
+              AND (
+                cem.entity_id = @api_id
+                OR cem.entity_id IN (SELECT impacted_service_id FROM dedup_blast)
+                OR cem.entity_id IN (SELECT adr_id FROM AdrGovernsApi WHERE api_id = @api_id)
+                OR cem.entity_id IN (SELECT req_id FROM ReqAppliesToApi WHERE api_id = @api_id)
+              )
+          )
+        )
+      SELECT
+        b.impacted_service_id,
+        s.service_name,
+        b.hop_distance,
+        b.impact_category,
+        s.tier,
+        s.criticality,
+        o.owner_id,
+        o.team_name,
+        o.slack_channel,
+        EXISTS (
+          SELECT 1
+          FROM ServiceCallsApi AS sca
+          JOIN Apis AS legacy_api ON sca.api_id = legacy_api.api_id
+          WHERE sca.service_id = b.impacted_service_id
+            AND (sca.migration_status = 'AT_RISK' OR legacy_api.lifecycle_status = 'DEPRECATED')
+        ) AS has_legacy_v1_risk,
+        (SELECT governing_adrs FROM target_adrs) AS governing_adrs,
+        (SELECT applicable_requirements FROM target_reqs) AS applicable_requirements,
+        (SELECT markdown_citations FROM top_citations) AS markdown_citations
+      FROM dedup_blast AS b
+      JOIN Services AS s ON b.impacted_service_id = s.service_id
+      JOIN Owners AS o ON s.owner_id = o.owner_id
+      ORDER BY
+        b.hop_distance ASC,
+        b.impact_category_rank ASC,
+        CASE s.criticality
+          WHEN 'CRITICAL' THEN 1
+          WHEN 'HIGH' THEN 2
+          WHEN 'MEDIUM' THEN 3
+          ELSE 4
+        END ASC,
+        b.impacted_service_id ASC
+      LIMIT @max_rows
+    parameters:
+      - name: api_id
+        type: string
+        description: Canonical Acme Commerce API identifier (e.g., api-payments-charge-v2)
+        allowedValues:
+          - "^api-[a-z0-9-]+$"
+      - name: search_query
+        type: string
+        description: Natural-language change impact or compliance question for hybrid FTS + vector citation retrieval
+      - name: query_embedding
+        type: string
+        description: Server-generated 768-dim Vertex AI embedding derived from search_query
+        valueFromParam: search_query
+        embeddedBy: gemini-embedder
+      - name: max_rows
+        type: integer
+        description: Maximum impacted services to return
+        default: 20
+        minValue: 1
+        maxValue: 50
+
+  search_sdlc_knowledge_hybrid:
+    type: spanner-sql
+    source: sdlc-spanner
+    readOnly: true
+    description: >-
+      Performs server-side hybrid search over unstructured SDLC Markdown
+      DocumentChunks by fusing ScaNN vector search (APPROX_COSINE_DISTANCE) and
+      Full-Text Search (SdlcSynonymDict + enhance_query) via Reciprocal Rank
+      Fusion (RRF, k=60) without analytic window functions.
+    statement: |
+      WITH
+        query_vec AS (
+          SELECT
+            ARRAY(
+              SELECT CAST(v AS FLOAT32)
+              FROM UNNEST(@query_embedding) AS v WITH OFFSET AS pos
+              ORDER BY pos
+            ) AS val
+        ),
+        vec_top AS (
+          SELECT
+            d.chunk_id,
+            APPROX_COSINE_DISTANCE(
+              d.embedding,
+              query_vec.val,
+              options => JSON '{"num_leaves_to_search": 10}'
+            ) AS approx_distance
+          FROM DocumentChunks AS d, query_vec
+          WHERE d.embedding IS NOT NULL
+          ORDER BY approx_distance ASC
+          LIMIT 50
+        ),
+        fts_top AS (
+          SELECT
+            chunk_id,
+            SCORE(
+              content_tokens,
+              @search_query,
+              dictionary => 'SdlcSynonymDict',
+              enhance_query => TRUE
+            ) AS fts_score
+          FROM DocumentChunks
+          WHERE SEARCH(
+            content_tokens,
+            @search_query,
+            dictionary => 'SdlcSynonymDict',
+            enhance_query => TRUE
+          )
+          ORDER BY fts_score DESC
+          LIMIT 50
+        ),
+        rrf_ranked AS (
+          SELECT
+            chunk_id,
+            SUM(1.0 / (60.0 + rank + 1.0)) AS rrf_score
+          FROM (
+            SELECT chunk_id, rank
+            FROM UNNEST(ARRAY(SELECT chunk_id FROM vec_top ORDER BY approx_distance ASC)) AS chunk_id WITH OFFSET AS rank
+            UNION ALL
+            SELECT chunk_id, rank
+            FROM UNNEST(ARRAY(SELECT chunk_id FROM fts_top ORDER BY fts_score DESC)) AS chunk_id WITH OFFSET AS rank
+          )
+          GROUP BY chunk_id
+        )
+      SELECT
+        dc.chunk_id,
+        dc.doc_type,
+        dc.entity_id,
+        dc.source_path,
+        dc.section_heading,
+        dc.content,
+        ROUND(r.rrf_score, 5) AS rrf_score
+      FROM rrf_ranked AS r
+      JOIN DocumentChunks AS dc ON r.chunk_id = dc.chunk_id
+      WHERE (@doc_type = '' OR dc.doc_type = @doc_type)
+      ORDER BY r.rrf_score DESC, dc.chunk_id ASC
+      LIMIT @top_k
+    parameters:
+      - name: search_query
+        type: string
+        description: Natural-language or keyword query across runbooks, API specs, ADRs, and requirements
+      - name: query_embedding
+        type: string
+        description: Server-generated 768-dim Vertex AI embedding derived from search_query
+        valueFromParam: search_query
+        embeddedBy: gemini-embedder
+      - name: doc_type
+        type: string
+        description: Optional document category filter (empty string searches all categories)
+        default: ""
+        allowedValues:
+          - ""
+          - "service"
+          - "api"
+          - "adr"
+          - "requirement"
+          - "owner"
+      - name: top_k
+        type: integer
+        description: Maximum ranked Markdown chunks to return
+        default: 10
+        minValue: 1
+        maxValue: 30
+
+  get_service_ownership_and_slas:
+    type: spanner-sql
+    source: sdlc-spanner
+    readOnly: true
+    description: >-
+      Looks up microservice ownership, tier, criticality, SLA targets, Slack
+      escalation channels, and exposed API catalogs by service_id or domain.
+    statement: |
+      SELECT
+        s.service_id,
+        s.service_name,
+        s.tier,
+        s.criticality,
+        s.sla_target_pct,
+        s.domain,
+        s.lifecycle_status,
+        o.owner_id,
+        o.team_name,
+        o.org_unit,
+        o.slack_channel,
+        ARRAY(
+          SELECT AS STRUCT
+            a.api_id,
+            a.http_method,
+            a.http_path,
+            a.lifecycle_status,
+            a.is_public,
+            a.latency_budget_ms
+          FROM Apis AS a
+          WHERE a.service_id = s.service_id
+          ORDER BY a.api_id ASC
+        ) AS exposed_apis
+      FROM Services AS s
+      JOIN Owners AS o ON s.owner_id = o.owner_id
+      WHERE (@service_id = '' OR s.service_id = @service_id)
+        AND (@domain = '' OR s.domain = @domain)
+      ORDER BY
+        CASE s.tier
+          WHEN 'TIER_0' THEN 1
+          WHEN 'TIER_1' THEN 2
+          ELSE 3
+        END ASC,
+        s.service_id ASC
+      LIMIT @max_rows
+    parameters:
+      - name: service_id
+        type: string
+        description: Optional canonical service ID (e.g., svc-payments); empty string lists matching domain
+        default: ""
+        allowedValues:
+          - "^$"
+          - "^svc-[a-z0-9-]+$"
+      - name: domain
+        type: string
+        description: Optional business domain filter (empty string returns all domains)
+        default: ""
+        allowedValues:
+          - ""
+          - "payments"
+          - "checkout"
+          - "finance"
+          - "orders"
+          - "ecosystem"
+          - "messaging"
+          - "analytics"
+          - "security"
+          - "risk"
+          - "merchandising"
+      - name: max_rows
+        type: integer
+        description: Maximum services to return
+        default: 12
+        minValue: 1
+        maxValue: 50
+
+  list_my_team_assets:
+    type: spanner-sql
+    source: sdlc-spanner
+    readOnly: true
+    description: >-
+      Lists microservices, exposed APIs, ADRs, and requirements owned strictly
+      by the authenticated caller's engineering team. Team identity is bound
+      server-side from the verified OIDC email claim outside LLM prompt control.
+    authRequired:
+      - google-corp-oidc
+    statement: |
+      SELECT
+        o.owner_id,
+        o.team_name,
+        o.org_unit,
+        o.slack_channel,
+        s.service_id,
+        s.service_name,
+        s.tier,
+        s.criticality,
+        s.sla_target_pct,
+        ARRAY(
+          SELECT AS STRUCT
+            a.api_id,
+            a.http_method,
+            a.http_path,
+            a.lifecycle_status
+          FROM Apis AS a
+          WHERE a.service_id = s.service_id
+          ORDER BY a.api_id ASC
+        ) AS exposed_apis,
+        ARRAY(
+          SELECT AS STRUCT
+            d.adr_id,
+            d.title,
+            d.lifecycle_status
+          FROM Adrs AS d
+          WHERE d.owner_id = o.owner_id
+          ORDER BY d.adr_id ASC
+        ) AS team_adrs
+      FROM Owners AS o
+      JOIN Services AS s ON s.owner_id = o.owner_id
+      WHERE o.email = @caller_email
+      ORDER BY s.service_id ASC
+      LIMIT @max_rows
+    parameters:
+      - name: caller_email
+        type: string
+        description: Verified OIDC email claim injected server-side (invisible to LLM; prevents cross-team exfiltration)
+        authServices:
+          - name: google-corp-oidc
+            field: email
+      - name: max_rows
+        type: integer
+        description: Maximum owned service rows to return
+        default: 20
+        minValue: 1
+        maxValue: 50
+
+  draft_adr_proposal:
+    type: spanner-sql
+    source: sdlc-spanner
+    readOnly: false
+    description: >-
+      Scoped write tool for the ADR Curator persona. Inserts a new Architecture
+      Decision Record strictly in PROPOSED lifecycle status owned by the
+      authenticated caller's team. Cannot overwrite ACCEPTED or SUPERSEDED ADRs.
+    authRequired:
+      - google-corp-oidc
+    statement: |
+      INSERT INTO Adrs (adr_id, title, lifecycle_status, owner_id, decision_date, summary)
+      SELECT
+        @adr_id,
+        @title,
+        'PROPOSED',
+        o.owner_id,
+        CURRENT_DATE(),
+        CONCAT('[Proposed by ', @caller_email, '] ', @summary)
+      FROM Owners AS o
+      WHERE o.email = @caller_email
+    parameters:
+      - name: adr_id
+        type: string
+        description: New ADR identifier matching ADR-NNN or ADR-NNNN (e.g., ADR-011)
+        allowedValues:
+          - "^ADR-[0-9]{3,4}$"
+      - name: title
+        type: string
+        description: Concise title of the proposed architecture decision
+      - name: summary
+        type: string
+        description: Rationale, API blast-radius findings, compliance checks, and rollout plan
+      - name: caller_email
+        type: string
+        description: Verified OIDC email claim of the proposing team (server-injected; invisible to LLM)
+        authServices:
+          - name: google-corp-oidc
+            field: email
+
+  audit_compliance_blast_radius:
+    type: spanner-sql
+    source: sdlc-spanner
+    readOnly: true
+    description: >-
+      Read-only Security Auditor tool querying SecurityComplianceImpactView,
+      governing ADRs, regulatory compliance requirements (PCI-DSS 4.0, SOX,
+      ZERO_TRUST, THAILAND_PDPA), and deprecated legacy AT_RISK API consumers.
+    statement: |
+      WITH compliance_scope AS (
+        SELECT DISTINCT v.api_id
+        FROM SecurityComplianceImpactView AS v
+        WHERE (@api_id = '' OR v.api_id = @api_id)
+      )
+      SELECT
+        a.api_id,
+        a.http_method,
+        a.http_path,
+        a.lifecycle_status AS api_status,
+        a.criticality,
+        a.is_public,
+        s.service_id AS exposing_service_id,
+        s.tier AS service_tier,
+        o.owner_id,
+        o.team_name,
+        o.clearance_tier,
+        ARRAY(
+          SELECT AS STRUCT
+            r.req_id,
+            r.framework,
+            r.severity,
+            ra.compliance_status
+          FROM ReqAppliesToApi AS ra
+          JOIN Requirements AS r ON ra.req_id = r.req_id
+          WHERE ra.api_id = a.api_id
+            AND (@framework = '' OR r.framework = @framework)
+          ORDER BY r.req_id ASC
+        ) AS applicable_requirements,
+        ARRAY(
+          SELECT AS STRUCT
+            d.adr_id,
+            d.title,
+            d.lifecycle_status,
+            ag.governance_type
+          FROM AdrGovernsApi AS ag
+          JOIN Adrs AS d ON ag.adr_id = d.adr_id
+          WHERE ag.api_id = a.api_id
+          ORDER BY d.adr_id ASC
+        ) AS governing_adrs,
+        ARRAY(
+          SELECT AS STRUCT
+            sca.service_id AS caller_service_id,
+            sca.call_mode,
+            sca.migration_status,
+            sca.rps_estimate
+          FROM ServiceCallsApi AS sca
+          WHERE sca.api_id = a.api_id
+            AND (sca.migration_status = 'AT_RISK' OR a.lifecycle_status = 'DEPRECATED')
+          ORDER BY sca.service_id ASC
+        ) AS at_risk_callers
+      FROM compliance_scope AS cs
+      JOIN Apis AS a ON cs.api_id = a.api_id
+      JOIN Services AS s ON a.service_id = s.service_id
+      JOIN Owners AS o ON s.owner_id = o.owner_id
+      WHERE (@framework = '' OR EXISTS (
+        SELECT 1
+        FROM ReqAppliesToApi AS ra
+        JOIN Requirements AS r ON ra.req_id = r.req_id
+        WHERE ra.api_id = a.api_id
+          AND r.framework = @framework
+      ))
+      ORDER BY
+        CASE a.criticality
+          WHEN 'CRITICAL' THEN 1
+          WHEN 'HIGH' THEN 2
+          WHEN 'MEDIUM' THEN 3
+          ELSE 4
+        END ASC,
+        a.api_id ASC
+      LIMIT @max_rows
+    parameters:
+      - name: api_id
+        type: string
+        description: Optional API ID to audit (empty string audits all regulated APIs in scope)
+        default: ""
+        allowedValues:
+          - "^$"
+          - "^api-[a-z0-9-]+$"
+      - name: framework
+        type: string
+        description: Optional compliance framework filter (e.g., PCI-DSS 4.0, SOX, ZERO_TRUST, THAILAND_PDPA)
+        default: ""
+        allowedValues:
+          - ""
+          - "PCI-DSS 4.0"
+          - "SOX"
+          - "ZERO_TRUST"
+          - "THAILAND_PDPA"
+          - "COMPLIANCE_LEGACY"
+          - "RISK_POLICY"
+          - "SECURITY"
+          - "PRIVACY"
+          - "DR_RPO_RTO"
+          - "SLA"
+          - "CHANGE_MGMT"
+          - "RESILIENCE"
+          - "MESSAGING"
+          - "OBSERVABILITY"
+      - name: max_rows
+        type: integer
+        description: Maximum audited API rows to return
+        default: 24
+        minValue: 1
+        maxValue: 50
+
+toolsets:
+  impact-analyst-toolset:
+    - analyze_api_blast_radius_graphrag
+    - search_sdlc_knowledge_hybrid
+    - get_service_ownership_and_slas
+    - list_my_team_assets
+  adr-curator-toolset:
+    - analyze_api_blast_radius_graphrag
+    - search_sdlc_knowledge_hybrid
+    - get_service_ownership_and_slas
+    - list_my_team_assets
+    - draft_adr_proposal
+  security-auditor-toolset:
+    - analyze_api_blast_radius_graphrag
+    - search_sdlc_knowledge_hybrid
+    - get_service_ownership_and_slas
+    - audit_compliance_blast_radius

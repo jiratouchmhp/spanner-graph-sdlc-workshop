@@ -1,0 +1,263 @@
+{
+  "schema_version": "1.0.0",
+  "hero_question": "What breaks if we change POST /v2/payments/charge?",
+  "api_id": "api-payments-charge-v2",
+  "http_method": "POST",
+  "http_path": "/v2/payments/charge",
+  "exposing_service_id": "svc-payments",
+  "exposing_owner_id": "team-payments",
+  "deterministic_sort_order": [
+    "hop_distance ASC",
+    "impact_category_rank ASC (DIRECT_SYNC=1, TRANSITIVE_UPSTREAM=2, DATA_FEED_CONSUMER=3)",
+    "criticality_rank ASC (CRITICAL=1, HIGH=2, MEDIUM=3, LOW=4)",
+    "impacted_service_id ASC"
+  ],
+  "expected_impact_row_count": 7,
+  "expected_impact_rows": [
+    {
+      "impacted_service_id": "svc-billing",
+      "service_name": "Subscription & Invoice Billing",
+      "hop_distance": 1,
+      "impact_category": "DIRECT_SYNC",
+      "tier": "TIER_0",
+      "criticality": "CRITICAL",
+      "owner_id": "team-billing",
+      "slack_channel": "#billing-ledger",
+      "has_legacy_v1_risk": true
+    },
+    {
+      "impacted_service_id": "svc-checkout",
+      "service_name": "Checkout Orchestrator",
+      "hop_distance": 1,
+      "impact_category": "DIRECT_SYNC",
+      "tier": "TIER_0",
+      "criticality": "CRITICAL",
+      "owner_id": "team-checkout",
+      "slack_channel": "#checkout-orders",
+      "has_legacy_v1_risk": false
+    },
+    {
+      "impacted_service_id": "svc-orders",
+      "service_name": "Order Lifecycle Service",
+      "hop_distance": 2,
+      "impact_category": "TRANSITIVE_UPSTREAM",
+      "tier": "TIER_1",
+      "criticality": "HIGH",
+      "owner_id": "team-checkout",
+      "slack_channel": "#checkout-orders",
+      "has_legacy_v1_risk": false
+    },
+    {
+      "impacted_service_id": "svc-partner-gw",
+      "service_name": "B2B Partner API Gateway",
+      "hop_distance": 2,
+      "impact_category": "TRANSITIVE_UPSTREAM",
+      "tier": "TIER_1",
+      "criticality": "HIGH",
+      "owner_id": "team-integrations",
+      "slack_channel": "#partner-messaging",
+      "has_legacy_v1_risk": false
+    },
+    {
+      "impacted_service_id": "svc-notifications",
+      "service_name": "Customer Notifications Engine",
+      "hop_distance": 3,
+      "impact_category": "TRANSITIVE_UPSTREAM",
+      "tier": "TIER_2",
+      "criticality": "MEDIUM",
+      "owner_id": "team-integrations",
+      "slack_channel": "#partner-messaging",
+      "has_legacy_v1_risk": false
+    },
+    {
+      "impacted_service_id": "svc-webhooks",
+      "service_name": "Merchant Webhook Dispatcher",
+      "hop_distance": 3,
+      "impact_category": "TRANSITIVE_UPSTREAM",
+      "tier": "TIER_2",
+      "criticality": "MEDIUM",
+      "owner_id": "team-integrations",
+      "slack_channel": "#partner-messaging",
+      "has_legacy_v1_risk": false
+    },
+    {
+      "impacted_service_id": "svc-analytics",
+      "service_name": "Revenue & Funnel Analytics",
+      "hop_distance": 3,
+      "impact_category": "DATA_FEED_CONSUMER",
+      "tier": "TIER_2",
+      "criticality": "LOW",
+      "owner_id": "team-data",
+      "slack_channel": "#data-analytics",
+      "has_legacy_v1_risk": false
+    }
+  ],
+  "governing_adrs": [
+    {
+      "adr_id": "ADR-004",
+      "governance_type": "MANDATES",
+      "effective_date": "2024-09-12",
+      "title": "Tokenized Card Vault (tok_pci_v2) & 45ms Fail-Closed Fraud Gate",
+      "lifecycle_status": "ACCEPTED"
+    },
+    {
+      "adr_id": "ADR-005",
+      "governance_type": "CONSTRAINS",
+      "effective_date": "2024-10-03",
+      "title": "Idempotency Keys & Exactly-Once Financial Commit Semantics",
+      "lifecycle_status": "ACCEPTED"
+    },
+    {
+      "adr_id": "ADR-006",
+      "governance_type": "CONSTRAINS",
+      "effective_date": "2024-11-18",
+      "title": "Zero-Trust Service-to-Service mTLS & Short-Lived OIDC Tokens",
+      "lifecycle_status": "ACCEPTED"
+    },
+    {
+      "adr_id": "ADR-008",
+      "governance_type": "CONSTRAINS",
+      "effective_date": "2025-02-14",
+      "title": "Double-Entry Ledger Write-Ahead Posting & Reconciliation",
+      "lifecycle_status": "ACCEPTED"
+    },
+    {
+      "adr_id": "ADR-010",
+      "governance_type": "CONSTRAINS",
+      "effective_date": "2025-05-01",
+      "title": "Tier-0 API 180-Day Breaking-Change Freeze Policy",
+      "lifecycle_status": "ACCEPTED"
+    }
+  ],
+  "applicable_requirements": [
+    {
+      "req_id": "REQ-001",
+      "framework": "PCI-DSS 4.0",
+      "severity": "CRITICAL",
+      "title": "Cardholder Data Tokenization (tok_pci_v2_<32hex>)",
+      "compliance_status": "COMPLIANT"
+    },
+    {
+      "req_id": "REQ-002",
+      "framework": "SLA",
+      "severity": "CRITICAL",
+      "title": "Tier-0 Payment Latency (p99 <= 180ms, Fraud <= 45ms, 99.99% SLA)",
+      "compliance_status": "COMPLIANT"
+    },
+    {
+      "req_id": "REQ-003",
+      "framework": "RISK_POLICY",
+      "severity": "CRITICAL",
+      "title": "High-Value (> $500) Fail-Closed Fraud Scoring Gate",
+      "compliance_status": "COMPLIANT"
+    },
+    {
+      "req_id": "REQ-005",
+      "framework": "SOX",
+      "severity": "CRITICAL",
+      "title": "SOX Financial Auditability & 1:1 Idempotent Ledger Posting",
+      "compliance_status": "COMPLIANT"
+    },
+    {
+      "req_id": "REQ-006",
+      "framework": "ZERO_TRUST",
+      "severity": "CRITICAL",
+      "title": "Zero-Trust mTLS & Scoped OIDC Authorization",
+      "compliance_status": "COMPLIANT"
+    }
+  ],
+  "applicable_requirement_ids": [
+    "REQ-001",
+    "REQ-002",
+    "REQ-003",
+    "REQ-005",
+    "REQ-006"
+  ],
+  "verifiable_unstructured_citations": [
+    {
+      "source_path": "data/unstructured/adrs/ADR-004.md",
+      "key_facts": [
+        "tok_pci_v2_<32hex>",
+        "45ms",
+        "> $500"
+      ],
+      "verified_in_corpus": true,
+      "file_sha256": "756faa37ad812c922308a00d4319dc99b89eceb1335535946badb87beb3cb037"
+    },
+    {
+      "source_path": "data/unstructured/adrs/ADR-010.md",
+      "key_facts": [
+        "180-day",
+        "Tier-0"
+      ],
+      "verified_in_corpus": true,
+      "file_sha256": "4b597d3c479a981a2e78d6aee21a66741cc3597cc70740816d377740f9d256bf"
+    },
+    {
+      "source_path": "data/unstructured/apis/api-payments-charge-v2.md",
+      "key_facts": [
+        "POST /v2/payments/charge",
+        "Idempotency-Key",
+        "svc-checkout",
+        "svc-billing"
+      ],
+      "verified_in_corpus": true,
+      "file_sha256": "e30c948e3f2b1a7020ad16abdd09e862b423e0e6fc776ab0f1c799f44d175d08"
+    },
+    {
+      "source_path": "data/unstructured/apis/api-payments-charge-v1.md",
+      "key_facts": [
+        "DEPRECATED",
+        "AT_RISK",
+        "svc-billing"
+      ],
+      "verified_in_corpus": true,
+      "file_sha256": "0f1b9c60ce7cf78168a3ff4ac0403793c73a3ed6956b99194baa91b9621f893c"
+    },
+    {
+      "source_path": "data/unstructured/requirements/REQ-001.md",
+      "key_facts": [
+        "PCI-DSS",
+        "tok_pci_v2"
+      ],
+      "verified_in_corpus": true,
+      "file_sha256": "2420861bad37115ed267cf6ad62a9c59eb1c0428b203bd5a8077e5ae17af77b0"
+    },
+    {
+      "source_path": "data/unstructured/requirements/REQ-002.md",
+      "key_facts": [
+        "45ms",
+        "180ms"
+      ],
+      "verified_in_corpus": true,
+      "file_sha256": "b1334fd5a61ac024b949ada417bbb9df330149e0c52722c847a40aa91fd0c457"
+    },
+    {
+      "source_path": "data/unstructured/requirements/REQ-003.md",
+      "key_facts": [
+        "$500",
+        "fail-closed"
+      ],
+      "verified_in_corpus": true,
+      "file_sha256": "5cd32721d0959e4ed26ac44a3885d92957672f4ce622a7ce5a14fa215f76d60e"
+    },
+    {
+      "source_path": "data/unstructured/requirements/REQ-005.md",
+      "key_facts": [
+        "SOX",
+        "Idempotency-Key"
+      ],
+      "verified_in_corpus": true,
+      "file_sha256": "f9c084df45ed4acd8b196087bb549f581f903c28887bda3e8255359aabcfd175"
+    },
+    {
+      "source_path": "data/unstructured/requirements/REQ-006.md",
+      "key_facts": [
+        "mTLS",
+        "api-auth-token-v2"
+      ],
+      "verified_in_corpus": true,
+      "file_sha256": "1a397f2c5cfd39e53a1aef11de21e37c001c8e67d0844ec38ae94c9195b9b6f3"
+    }
+  ]
+}

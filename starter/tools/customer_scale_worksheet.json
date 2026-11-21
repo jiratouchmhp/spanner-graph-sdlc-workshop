@@ -1,0 +1,48 @@
+{
+  "todo_status": "TODO(Lab 7): Replace the sample enterprise defaults below with your real organization's SDLC Knowledge Graph scale, run `make sizing WORKSHEET=starter/tools/customer_scale_worksheet.json`, review Bangkok/Singapore TCO & CUD sensitivity, then change this field to COMPLETED.",
+  "README_FIELD_GUIDE": {
+    "purpose": "Lab 7 interactive capacity sizing & 3-store TCO consolidation worksheet for Cloud Spanner Enterprise (Graph + Full-Text Search + ScaNN Vector Search). Parsed directly by `solution/tools/sizing_calculator.py --worksheet starter/tools/customer_scale_worksheet.json`.",
+    "antigravity_skills": [
+      ".agents/skills/spanner-performance-observability-and-sizing/SKILL.md",
+      ".agents/skills/spanner-enterprise-platform-ops/SKILL.md"
+    ],
+    "how_to_complete_lab_7": [
+      "1. Edit `nodes`, `edges`, `chunks`, `qps`, `write_pct`, `cold_hdd_pct`, `region`, and `dr_backup_region` to match your target production workload.",
+      "2. Run: python3 solution/tools/sizing_calculator.py --worksheet starter/tools/customer_scale_worksheet.json",
+      "3. Compare Bangkok (`asia-southeast3`, 1.05x US, Thailand PDPA resident) vs Singapore (`asia-southeast1`, 1.144x US), On-Demand vs 1-Yr/3-Yr CUDs (-20% / -40%), and SSD-only vs SSD->HDD Locality Group tiering (5x storage savings).",
+      "4. Update `todo_status` above to \"COMPLETED\" and run `make TRACK=starter verify-lab LAB=7`."
+    ],
+    "field_definitions": {
+      "nodes": "Total structured graph entities (e.g., services, APIs, ADRs, requirements, owners, repos, tickets). Modeled at ~1 KiB/node base row.",
+      "edges": "Total logical & explicit graph relationships (CALLS_API, DEPENDS_ON, GOVERNS, APPLIES_TO, etc.). Modeled at ~256 B/edge + ~2.0x reverse covering STORING indexes.",
+      "chunks": "Total unstructured Markdown/doc/runbook chunks in DocumentChunks. Modeled at ~2 KiB text + 3.0 KiB (768-dim FLOAT32 embedding) + ~0.5x FTS index + ~1.3x ScaNN vector index.",
+      "qps": "Peak sustained combined read + write GraphRAG requests per second. Regional 3-zone sizing enforces < 65% High-Priority CPU headroom.",
+      "write_pct": "Percentage of total QPS that are multi-model writes (0-100; typical enterprise SDLC KG is 10-20%).",
+      "vector_dim": "FLOAT32 embedding dimensionality (default 768 for Vertex AI gemini-embedding-001 = 3.0 KiB/chunk).",
+      "cold_hdd_pct": "Percentage of archival non-key storage (0-100) tiered from SSD ($0.315/GiB-mo in Bangkok) to HDD ($0.063/GiB-mo = 5x savings) via Locality Groups. Keep hot PKs & indexes on SSD!",
+      "region": "Primary Cloud Spanner Enterprise region: 'asia-southeast3' (Bangkok, Thailand PDPA resident, 99.99% 3-zone SLA, $1.2915/node-hr) | 'asia-southeast1' (Singapore, $1.40712/node-hr) | 'us-central1' (Iowa reference, $1.23/node-hr).",
+      "dr_backup_region": "Optional cross-region backup copy destination ('asia-southeast1' recommended for Bangkok DR: $0.08/GiB Asia egress + $0.03432/GiB-mo DR storage; set to 'none' to disable).",
+      "edition": "Cloud Spanner edition: 'enterprise' (required minimum for Spanner Graph, FTS, ScaNN Vector Search, Locality Groups, Managed Autoscaler) or 'enterprise_plus'.",
+      "ro_replicas": "Optional additional read-only replicas per node for ultra-high read isolation ($0.4305/node-hr in Bangkok Enterprise; default 0).",
+      "enable_primary_backup": "Set true for production (AUTOMATIC backups + 7-day PITR). Production ALWAYS requires >= 1,000 PUs (1 node); 100 PUs is strictly workshop/dev sandbox only!"
+    }
+  },
+  "customer_name": "Acme Commerce Platform (Sample Enterprise Baseline)",
+  "workload_id": "customer_sdlc_graphrag_prod",
+  "workload_name": "Enterprise SDLC Knowledge Graph & GraphRAG Consolidation (Bangkok + Singapore DR)",
+  "use_case": "Consolidate Neo4j CE + Separate Vector DB + Separate Keyword Search Cluster into Cloud Spanner Enterprise",
+  "owner": "platform-architecture@example.com",
+  "nodes": 500000,
+  "edges": 2500000,
+  "chunks": 1200000,
+  "qps": 180,
+  "write_pct": 15,
+  "vector_dim": 768,
+  "cold_hdd_pct": 40,
+  "region": "asia-southeast3",
+  "dr_backup_region": "asia-southeast1",
+  "edition": "enterprise",
+  "ro_replicas": 0,
+  "enable_primary_backup": true,
+  "notes": "Sample mid-sized enterprise baseline (500k nodes, 2.5M edges, 1.2M chunks, 180 QPS, 40% HDD cold archive) running primary in Bangkok (asia-southeast3) with cross-region DR backup copies in Singapore (asia-southeast1)."
+}

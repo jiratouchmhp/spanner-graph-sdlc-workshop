@@ -1,0 +1,13 @@
+owner_id,service_id
+team-payments,svc-payments
+team-checkout,svc-checkout
+team-billing,svc-billing
+team-checkout,svc-orders
+team-integrations,svc-partner-gw
+team-integrations,svc-notifications
+team-integrations,svc-webhooks
+team-data,svc-analytics
+team-security,svc-auth
+team-risk,svc-fraud
+team-billing,svc-ledger
+team-catalog,svc-inventory

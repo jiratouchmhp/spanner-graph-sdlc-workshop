@@ -1,0 +1,9 @@
+owner_id,team_name,org_unit,slack_channel,email,oncall_pager,clearance_tier,escalation_lead
+team-payments,Payments Engineering,Core Commerce,#payments-eng,payments-eng@acme-commerce.example,pd-payments-tier0@acme-commerce.example,RESTRICTED_PCI,Priya Nair - Staff Payments Architect
+team-checkout,Checkout & Orders,Core Commerce,#checkout-orders,checkout-orders@acme-commerce.example,pd-checkout-tier0@acme-commerce.example,STANDARD,Somchai Wattana - Principal Checkout Engineer
+team-billing,Billing & Ledger,Finance Platform,#billing-ledger,billing-ledger@acme-commerce.example,pd-billing-sox@acme-commerce.example,RESTRICTED_SOX,Elena Rostova - Director of Financial Systems
+team-risk,Risk & Fraud Science,Trust & Safety,#risk-fraud,risk-fraud@acme-commerce.example,pd-risk-realtime@acme-commerce.example,RESTRICTED_PCI,Marcus Vance - Head of Fraud Engineering
+team-security,Security & Identity,Security & Compliance,#security-iam,security-iam@acme-commerce.example,pd-secops-24x7@acme-commerce.example,RESTRICTED_SEC,Niran Chaiyaphum - Principal Security Architect
+team-catalog,Catalog & Inventory,Merchandising,#catalog-inventory,catalog-inventory@acme-commerce.example,pd-catalog-ops@acme-commerce.example,STANDARD,Mei-Ling Tan - Senior Staff Inventory Engineer
+team-integrations,Partner & Messaging,Ecosystem,#partner-messaging,partner-messaging@acme-commerce.example,pd-integrations-ops@acme-commerce.example,STANDARD,David Kim - Ecosystem Engineering Lead
+team-data,Data & Analytics,Data Platform,#data-analytics,data-analytics@acme-commerce.example,pd-data-platform@acme-commerce.example,INTERNAL_ANALYTICS,Arunee Siriporn - Data Platform Lead

@@ -1,0 +1,36 @@
+-- =============================================================================
+-- 03b_remote_models.sql.tmpl
+-- Acme Commerce Platform — Vertex AI Text Embedding Model Registration
+-- Target: Cloud Spanner Enterprise Edition | Dialect: GOOGLE_STANDARD_SQL
+--
+-- Template Variables (rendered by solution/pipelines/apply_postload.py):
+--   ${GOOGLE_CLOUD_PROJECT}  -> Active GCP project ID
+--   ${VERTEX_AI_LOCATION}    -> Default: asia-southeast1 (Singapore, ~25 ms RTT
+--                               from Bangkok regional-asia-southeast3 primary)
+--
+-- CRITICAL Regional & Schema Invariants (INV-08, INV-09):
+--   1. Vertex AI predict-API text embedding models (gemini-embedding-001) ONLY
+--      support regional endpoints (such as asia-southeast1) — NEVER point this
+--      embedding model at a non-regional endpoint.
+--   2. Vertex AI embedding responses wrap vectors inside a nested JSON object
+--      {"embeddings": {"statistics": {...}, "values": [...]}}. Declaring a flat
+--      ARRAY<FLOAT32> fails at query time with INVALID_ARGUMENT.
+--   3. CREATE MODEL defers endpoint validation until first ML.PREDICT call;
+--      always run a 1-row smoke query immediately after applying this DDL.
+-- =============================================================================
+
+CREATE OR REPLACE MODEL SdlcTextEmbedding
+INPUT (
+  content STRING(MAX),
+  task_type STRING(MAX) OPTIONS (required = false)
+)
+OUTPUT (
+  embeddings STRUCT<
+    statistics STRUCT<truncated BOOL, token_count FLOAT64>,
+    values ARRAY<FLOAT32>
+  >
+)
+REMOTE OPTIONS (
+  endpoint = '//aiplatform.googleapis.com/projects/${GOOGLE_CLOUD_PROJECT}/locations/${VERTEX_AI_LOCATION}/publishers/google/models/gemini-embedding-001',
+  default_batch_size = 5
+);

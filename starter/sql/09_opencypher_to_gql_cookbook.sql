@@ -1,0 +1,107 @@
+-- =============================================================================
+-- 09_opencypher_to_gql_cookbook.sql (STARTER — Lab 1)
+-- Acme Commerce Platform — Lab 1 Neo4j openCypher v9 -> Spanner ISO GQL Cookbook
+--
+-- Target: Cloud Spanner Enterprise Edition | Dialect: GOOGLE_STANDARD_SQL
+-- Standards: ISO/IEC 39075:2024 (GQL) + ISO/IEC 9075-16:2023 (SQL/PGQ)
+--
+-- Antigravity Skills for Lab 1:
+--   - Primary: .agents/skills/spanner-migration-and-neo4j-playbook/SKILL.md
+--   - Support: .agents/skills/spanner-graph-modeling-and-gql/SKILL.md
+--
+-- Instructions:
+--   Translate all 5 Neo4j openCypher queries below into valid Cloud Spanner
+--   ISO GQL queries targeting the `SdlcGraph` property graph. Each exercise
+--   highlights a real migration trap that catches teams moving off Neo4j CE!
+--
+-- Verify when done:
+--   make TRACK=starter verify-lab LAB=1
+-- =============================================================================
+
+-- =============================================================================
+-- Exercise 1: Cycle Safety — Edge-Unique Path Mode vs Default WALK
+--   Migration Trap:
+--     Neo4j openCypher enforces relationship uniqueness by default. Cloud Spanner
+--     GQL defaults to `WALK`, which loops over the intentional cycle
+--     `svc-orders <-> svc-notifications` and produces duplicate/inflated paths!
+--     Specify the edge-unique path mode and use `ARRAY_LENGTH(...)` + `->{1,3}`.
+--
+--   Neo4j openCypher (translate this):
+--     MATCH (upstream:Service)-[r:DEPENDS_ON*1..3]->(target:Service {service_id: 'svc-checkout'})
+--     RETURN DISTINCT upstream.service_id AS upstream_service_id, length(r) AS hops
+--     ORDER BY hops ASC, upstream_service_id ASC;
+-- =============================================================================
+-- TODO(Lab 1): Write the cycle-safe ISO GQL translation over `SdlcGraph` below.
+
+
+-- =============================================================================
+-- Exercise 2: Unnesting Arrays (`UNWIND` -> ISO GQL Array Iteration)
+--   Migration Trap:
+--     openCypher `UNWIND` does not exist in ISO GQL. Bind the array with `LET`,
+--     iterate with ISO GQL's array-iteration clause, and remember that scalar
+--     variables bound by `LET`/iteration can ONLY be filtered in the outermost
+--     `WHERE` clause of `MATCH` (never inside inline `{service_id: sid}`!).
+--
+--   Neo4j openCypher (translate this):
+--     UNWIND ['svc-payments', 'svc-auth', 'svc-ledger'] AS sid
+--     MATCH (s:Service {service_id: sid})-[:EXPOSES]->(a:Api)
+--     RETURN s.service_id AS service_id, a.api_id AS api_id, a.http_path AS http_path
+--     ORDER BY service_id ASC, api_id ASC;
+-- =============================================================================
+-- TODO(Lab 1): Write the ISO GQL translation over `SdlcGraph` below.
+
+
+-- =============================================================================
+-- Exercise 3: Returning Whole Graph Nodes Safely (Avoiding GRAPH_ELEMENT Errors)
+--   Migration Trap:
+--     Top-level `RETURN s` fails in Spanner GQL ("Returning expressions of type
+--     GRAPH_ELEMENT is not allowed"). Serialize the node safely to JSON so hidden
+--     `TOKENLIST` columns (`search_tokens`, `name_ngrams`) map to JSON `null`
+--     without throwing a conversion error!
+--
+--   Neo4j openCypher (translate this):
+--     MATCH (s:Service {tier: 'TIER_0'})
+--     RETURN s
+--     ORDER BY s.service_id ASC
+--     LIMIT 5;
+-- =============================================================================
+-- TODO(Lab 1): Write the ISO GQL translation returning `service_id` and
+--   the safely JSON-serialized `service_node_json` below.
+
+
+-- =============================================================================
+-- Exercise 4: `ORDER BY`, Explicit Aliases, and `OFFSET`-Before-`LIMIT`
+--   Migration Trap:
+--     1. Standalone `ORDER BY` outside `RETURN` is silently ignored — attach
+--        `ORDER BY` directly to `RETURN`.
+--     2. Inside `RETURN`, `OFFSET` MUST come BEFORE `LIMIT` (`LIMIT 5 OFFSET 2`
+--        is a syntax error in ISO GQL!).
+--     3. Every expression in `RETURN` needs an explicit `AS` alias, and
+--        openCypher `toUpper(...)` becomes GoogleSQL `UPPER(...)`.
+--
+--   Neo4j openCypher (translate this):
+--     MATCH (a:Api)
+--     RETURN a.api_id, a.latency_budget_ms, toUpper(a.http_method)
+--     ORDER BY a.latency_budget_ms ASC, a.api_id ASC
+--     SKIP 2 LIMIT 5;
+-- =============================================================================
+-- TODO(Lab 1): Write the ISO GQL translation with `OFFSET 2` before `LIMIT 5` below.
+
+
+-- =============================================================================
+-- Exercise 5: `OPTIONAL MATCH ... WHERE` vs Post-Join `FILTER` Trap
+--   Migration Trap:
+--     Placing `FILTER c.migration_status = 'AT_RISK'` AFTER `OPTIONAL MATCH`
+--     evaluates the predicate after the LEFT OUTER JOIN, silently dropping all
+--     11 services with zero `AT_RISK` calls (turning LEFT JOIN into INNER JOIN!).
+--     Keep the predicate inside `OPTIONAL MATCH ... WHERE` so all 12 services
+--     appear, with only `svc-billing` showing its legacy `AT_RISK` call!
+--
+--   Neo4j openCypher (translate this):
+--     MATCH (s:Service)
+--     OPTIONAL MATCH (s)-[c:CALLS_API]->(a:Api)
+--     WHERE c.migration_status = 'AT_RISK'
+--     RETURN s.service_id AS service_id, a.api_id AS at_risk_api_id, c.rps_estimate AS legacy_rps
+--     ORDER BY service_id ASC;
+-- =============================================================================
+-- TODO(Lab 1): Write the ISO GQL translation preserving LEFT OUTER JOIN semantics below.

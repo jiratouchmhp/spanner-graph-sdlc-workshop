@@ -1,0 +1,63 @@
+{
+  "mcpServers": {
+    "sdlc-spanner-impact-analyst-npx": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@toolbox-sdk/server",
+        "--config",
+        "${WORKSPACE_ROOT}/solution/mcp/personas/tools.impact-analyst.yaml",
+        "--stdio"
+      ],
+      "env": {
+        "SPANNER_PROJECT": "${GOOGLE_CLOUD_PROJECT}",
+        "SPANNER_INSTANCE": "sdlc-kg-enterprise",
+        "SPANNER_DATABASE": "sdlc_knowledge_graph",
+        "SPANNER_DIALECT": "googlesql",
+        "GOOGLE_CLOUD_PROJECT": "${GOOGLE_CLOUD_PROJECT}",
+        "VERTEX_AI_LOCATION": "asia-southeast1",
+        "GOOGLE_OAUTH_CLIENT_ID": "${GOOGLE_OAUTH_CLIENT_ID}"
+      }
+    },
+    "sdlc-spanner-impact-analyst-local-bin": {
+      "command": "${WORKSPACE_ROOT}/solution/mcp/bin/toolbox",
+      "args": [
+        "--tools-file",
+        "${WORKSPACE_ROOT}/solution/mcp/personas/tools.impact-analyst.yaml",
+        "--stdio"
+      ],
+      "env": {
+        "SPANNER_PROJECT": "${GOOGLE_CLOUD_PROJECT}",
+        "SPANNER_INSTANCE": "sdlc-kg-enterprise",
+        "SPANNER_DATABASE": "sdlc_knowledge_graph",
+        "SPANNER_DIALECT": "googlesql",
+        "GOOGLE_CLOUD_PROJECT": "${GOOGLE_CLOUD_PROJECT}",
+        "VERTEX_AI_LOCATION": "asia-southeast1",
+        "GOOGLE_OAUTH_CLIENT_ID": "${GOOGLE_OAUTH_CLIENT_ID}"
+      }
+    },
+    "spanner-prebuilt-dev-hitl": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@toolbox-sdk/server",
+        "--prebuilt",
+        "spanner",
+        "--stdio"
+      ],
+      "env": {
+        "SPANNER_PROJECT": "${GOOGLE_CLOUD_PROJECT}",
+        "SPANNER_INSTANCE": "sdlc-kg-enterprise",
+        "SPANNER_DATABASE": "sdlc_knowledge_graph",
+        "SPANNER_DIALECT": "googlesql"
+      }
+    },
+    "sdlc-spanner-cloudrun-impact-analyst": {
+      "type": "http",
+      "url": "https://sdlc-mcp-impact-analyst-PROJECT_HASH-as.a.run.app/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_BEARER_TOKEN}"
+      }
+    }
+  }
+}

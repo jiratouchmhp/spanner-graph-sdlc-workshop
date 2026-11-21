@@ -1,0 +1,4 @@
+adr_id,supersedes_adr_id,superseded_date
+ADR-004,ADR-001,2024-09-12
+ADR-008,ADR-002,2025-02-14
+ADR-010,ADR-003,2025-05-01

@@ -1,0 +1,25 @@
+# Cloud Spanner Enterprise SDLC Knowledge Graph & GraphRAG Workshop
+# Python dependencies for live Cloud Spanner & Vertex AI pipelines.
+#
+# NOTE: All pipeline scripts in solution/pipelines/ support `--dry-run` (and
+# `hero_blast_radius_offline.py` runs fully offline) using the Python standard
+# library ONLY — zero external packages are required for offline labs or tests.
+
+# Cloud Spanner GoogleSQL client (Enterprise Edition: Graph, FTS, ScaNN, LROs)
+google-cloud-spanner>=3.53.0
+
+# Unified Google Gen AI SDK (Vertex AI backend in asia-southeast1 via ADC)
+google-genai>=1.10.0
+
+# YAML parsing for MCP Toolbox tools.yaml and per-persona rendering
+pyyaml>=6.0.1
+
+# Optional .env loader for local workshop shells (scripts include stdlib fallback)
+python-dotenv>=1.0.1
+
+# Google Cloud Application Default Credentials & OIDC token verification
+google-auth>=2.35.0
+
+# Optional Lab 6 Agent Development Kit (ADK) live multi-agent demo dependencies:
+# google-adk>=1.0.0
+# toolbox-core>=0.1.0

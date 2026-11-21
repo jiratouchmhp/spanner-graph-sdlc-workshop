@@ -1,0 +1,245 @@
+{
+  "schema_version": "1.0.0",
+  "hash_algorithm": "SHA-256 over lexicographically sorted, pipe-delimited trimmed row strings terminated by '\\n' (exact parity between data/structured/stage_apoc_export.py and Tier 4 of solution/sql/10_validate_migration_parity.sql).",
+  "counts": {
+    "entity_counts": {
+      "owners": 8,
+      "services": 12,
+      "apis": 24,
+      "adrs": 10,
+      "requirements": 14,
+      "total_nodes": 68
+    },
+    "explicit_relationship_counts": {
+      "service_calls_api": 48,
+      "service_depends_on_service": 28,
+      "adr_governs_api": 36,
+      "adr_supersedes_adr": 3,
+      "req_applies_to_api": 33,
+      "req_applies_to_service": 26
+    },
+    "explicit_edges": 174,
+    "dual_projected_edge_counts": {
+      "api_exposes_from_service": 24,
+      "owner_owns_service": 12,
+      "owner_owns_adr": 10,
+      "owner_owns_req": 14
+    },
+    "dual_projected_edges": 60,
+    "total_logical_edges": 234,
+    "unstructured_markdown_docs": 45
+  },
+  "topological_invariants": {
+    "hub_svc_auth_in_degree": 10,
+    "hub_api_auth_token_v2_callers": 10,
+    "cycle_svc_orders_notifications_edges": 2,
+    "data_feed_svc_analytics_edges": 3,
+    "legacy_at_risk_svc_billing_v1_call": 1,
+    "adr_supersessions": 3,
+    "hero_api_direct_callers": 2,
+    "hero_api_governing_adrs": 5,
+    "hero_api_applicable_requirements": 5
+  },
+  "spanner_table_hashes": {
+    "Owners": {
+      "csv_path": "data/structured/nodes/owners.csv",
+      "row_count": 8,
+      "columns": [
+        "owner_id",
+        "team_name",
+        "org_unit",
+        "slack_channel",
+        "email",
+        "oncall_pager",
+        "clearance_tier",
+        "escalation_lead"
+      ],
+      "canonical_sha256": "c732660c6b4bd36155095a04d163e6fc07e689b172a6fabd7c5ad4202cb4e30d"
+    },
+    "Services": {
+      "csv_path": "data/structured/nodes/services.csv",
+      "row_count": 12,
+      "columns": [
+        "service_id",
+        "service_name",
+        "tier",
+        "criticality",
+        "owner_id",
+        "sla_target_pct",
+        "domain",
+        "lifecycle_status",
+        "description"
+      ],
+      "canonical_sha256": "37f5a4ef703e36d98bdf2c5c6a84e080693d8c5f4e5b628737ea0c625852aab0"
+    },
+    "Apis": {
+      "csv_path": "data/structured/nodes/apis.csv",
+      "row_count": 24,
+      "columns": [
+        "api_id",
+        "service_id",
+        "http_method",
+        "http_path",
+        "api_version",
+        "lifecycle_status",
+        "criticality",
+        "is_public",
+        "latency_budget_ms",
+        "description"
+      ],
+      "canonical_sha256": "b0976643df5dec710ade441fe8e950cba26a1ceb032ef5848812b33549ad471a"
+    },
+    "Adrs": {
+      "csv_path": "data/structured/nodes/adrs.csv",
+      "row_count": 10,
+      "columns": [
+        "adr_id",
+        "title",
+        "lifecycle_status",
+        "owner_id",
+        "decision_date",
+        "summary"
+      ],
+      "canonical_sha256": "6e2c0506322db52f3d44fa884e03e41b4ba48514a24e422431d66530fd74d821"
+    },
+    "Requirements": {
+      "csv_path": "data/structured/nodes/requirements.csv",
+      "row_count": 14,
+      "columns": [
+        "req_id",
+        "framework",
+        "title",
+        "severity",
+        "owner_id",
+        "description"
+      ],
+      "canonical_sha256": "30d164f82b2076834b8101f22047611a3fe676d092c4b72b2e0fb7cb6791a39b"
+    },
+    "ServiceCallsApi": {
+      "csv_path": "data/structured/edges/service_calls_api.csv",
+      "row_count": 48,
+      "columns": [
+        "service_id",
+        "api_id",
+        "call_mode",
+        "is_critical",
+        "migration_status",
+        "rps_estimate"
+      ],
+      "canonical_sha256": "7f54f293116313d556535696145e8b48857ca580e8053b2dd6611e41a896a6f6"
+    },
+    "ServiceDependsOnService": {
+      "csv_path": "data/structured/edges/service_depends_on_service.csv",
+      "row_count": 28,
+      "columns": [
+        "from_service_id",
+        "to_service_id",
+        "dependency_type",
+        "is_sync",
+        "criticality"
+      ],
+      "canonical_sha256": "0fe2a58b89723331a059a3c2d3eedf3f85c1a65cd85a47344e0bda72682f730c"
+    },
+    "AdrGovernsApi": {
+      "csv_path": "data/structured/edges/adr_governs_api.csv",
+      "row_count": 36,
+      "columns": [
+        "adr_id",
+        "api_id",
+        "governance_type",
+        "effective_date"
+      ],
+      "canonical_sha256": "ad0f86a7711aa748de087d64aebe52b6de0c08d8f965eda3f7ab072e508d7e42"
+    },
+    "AdrSupersedesAdr": {
+      "csv_path": "data/structured/edges/adr_supersedes_adr.csv",
+      "row_count": 3,
+      "columns": [
+        "adr_id",
+        "supersedes_adr_id",
+        "superseded_date"
+      ],
+      "canonical_sha256": "48c48c8b694ff9d5088567fed1303b6649d2dba27f941faff1ca175f16f90c72"
+    },
+    "ReqAppliesToApi": {
+      "csv_path": "data/structured/edges/req_applies_to_api.csv",
+      "row_count": 33,
+      "columns": [
+        "req_id",
+        "api_id",
+        "compliance_status"
+      ],
+      "canonical_sha256": "9ec90900b781b341e90c3624205a5c4297ad813adf4a986273b365e5dbded3ea"
+    },
+    "ReqAppliesToService": {
+      "csv_path": "data/structured/edges/req_applies_to_service.csv",
+      "row_count": 26,
+      "columns": [
+        "req_id",
+        "service_id",
+        "compliance_status"
+      ],
+      "canonical_sha256": "b3133df9add4a7568fec43a8484aea960d25fe2bb28fe311d457ec887ae47209"
+    }
+  },
+  "dual_projected_csv_hashes": {
+    "api_exposes_from_service": {
+      "csv_path": "data/structured/edges/api_exposes_from_service.csv",
+      "edge_type": "EXPOSES",
+      "row_count": 24,
+      "columns": [
+        "service_id",
+        "api_id"
+      ],
+      "canonical_sha256": "375e21ada6b47dfe87f3da231ebb7d52d0ac1b55286c7e0d7777d0efa946a32c"
+    },
+    "owner_owns_service": {
+      "csv_path": "data/structured/edges/owner_owns_service.csv",
+      "edge_type": "OWNS_SERVICE",
+      "row_count": 12,
+      "columns": [
+        "owner_id",
+        "service_id"
+      ],
+      "canonical_sha256": "4144a5e75f472a2a3595aeb2777e67c4fcee901fc816a240a0abb1b4d5cc0727"
+    },
+    "owner_owns_adr": {
+      "csv_path": "data/structured/edges/owner_owns_adr.csv",
+      "edge_type": "OWNS_ADR",
+      "row_count": 10,
+      "columns": [
+        "owner_id",
+        "adr_id"
+      ],
+      "canonical_sha256": "db9fd29461e2d5d43390d53cc94e05da0a41f3258431266b56f7596c9018c392"
+    },
+    "owner_owns_req": {
+      "csv_path": "data/structured/edges/owner_owns_req.csv",
+      "edge_type": "OWNS_REQ",
+      "row_count": 14,
+      "columns": [
+        "owner_id",
+        "req_id"
+      ],
+      "canonical_sha256": "7e46fb27cc103a8028d66693448e50a130a0293d9190f8215fa5ea41a1d6f7da"
+    }
+  },
+  "table_sha256": {
+    "Owners": "c732660c6b4bd36155095a04d163e6fc07e689b172a6fabd7c5ad4202cb4e30d",
+    "Services": "37f5a4ef703e36d98bdf2c5c6a84e080693d8c5f4e5b628737ea0c625852aab0",
+    "Apis": "b0976643df5dec710ade441fe8e950cba26a1ceb032ef5848812b33549ad471a",
+    "Adrs": "6e2c0506322db52f3d44fa884e03e41b4ba48514a24e422431d66530fd74d821",
+    "Requirements": "30d164f82b2076834b8101f22047611a3fe676d092c4b72b2e0fb7cb6791a39b",
+    "ServiceCallsApi": "7f54f293116313d556535696145e8b48857ca580e8053b2dd6611e41a896a6f6",
+    "ServiceDependsOnService": "0fe2a58b89723331a059a3c2d3eedf3f85c1a65cd85a47344e0bda72682f730c",
+    "AdrGovernsApi": "ad0f86a7711aa748de087d64aebe52b6de0c08d8f965eda3f7ab072e508d7e42",
+    "AdrSupersedesAdr": "48c48c8b694ff9d5088567fed1303b6649d2dba27f941faff1ca175f16f90c72",
+    "ReqAppliesToApi": "9ec90900b781b341e90c3624205a5c4297ad813adf4a986273b365e5dbded3ea",
+    "ReqAppliesToService": "b3133df9add4a7568fec43a8484aea960d25fe2bb28fe311d457ec887ae47209",
+    "api_exposes_from_service": "375e21ada6b47dfe87f3da231ebb7d52d0ac1b55286c7e0d7777d0efa946a32c",
+    "owner_owns_service": "4144a5e75f472a2a3595aeb2777e67c4fcee901fc816a240a0abb1b4d5cc0727",
+    "owner_owns_adr": "db9fd29461e2d5d43390d53cc94e05da0a41f3258431266b56f7596c9018c392",
+    "owner_owns_req": "7e46fb27cc103a8028d66693448e50a130a0293d9190f8215fa5ea41a1d6f7da"
+  },
+  "corpus_aggregate_sha256": "e3dd450c68c5668ae8bf3bea5883496a1182bf8bf4808f62f27420c18a72cd60"
+}

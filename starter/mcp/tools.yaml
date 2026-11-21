@@ -1,0 +1,141 @@
+# Cloud Spanner Enterprise SDLC Knowledge Graph — MCP Toolbox Configuration (STARTER — Lab 6)
+# =============================================================================
+# Antigravity Skill for Lab 6:
+#   - Primary: .agents/skills/spanner-mcp-toolbox-and-agent-security/SKILL.md
+#
+# Strict Security & Schema Guardrails:
+#   1. `sources.sdlc-spanner` (type: spanner, Bangkok asia-southeast3) accepts
+#      ONLY valid keys: type, project, instance, database, dialect.
+#      NEVER add unsupported role keys to a `type: spanner` source!
+#      (Layer 1 Cloud Run MCP Toolbox enforces least privilege via dedicated
+#      DB-level SAs + sliced per-persona YAML files + readOnly: true + OIDC;
+#      Layer 2 FGAC SQL roles are enforced by Spanner Remote MCP, Spanner SDKs,
+#      and gcloud FGAC sessions.)
+#   2. NEVER expose raw SQL execution tools or dynamic template parameter blocks
+#      in production toolsets.
+#   3. ALWAYS set `readOnly: true` on every read tool (required for FTS and
+#      `roles/spanner.databaseReader` SAs).
+#   4. Configure `embeddingModels` using secretless regional Vertex AI via
+#      ADC / Cloud Run Workload Identity (`project` + `location: ${VERTEX_AI_LOCATION}`,
+#      default `asia-southeast1` — NEVER `global` and NEVER an active static `apiKey`).
+#
+# Verify when done:
+#   make TRACK=starter verify-lab LAB=6
+# =============================================================================
+
+sources:
+  sdlc-spanner:
+    type: spanner
+    project: ${SPANNER_PROJECT}
+    instance: ${SPANNER_INSTANCE}
+    database: ${SPANNER_DATABASE}
+    dialect: googlesql
+
+# TODO(Lab 6): Configure `embeddingModels` with a `gemini-embedder` entry using
+#   secretless regional Vertex AI (ADC / Cloud Run Workload Identity):
+#     - type: gemini
+#     - model: gemini-embedding-001
+#     - project: ${GOOGLE_CLOUD_PROJECT}
+#     - location: ${VERTEX_AI_LOCATION}   # default: asia-southeast1 (NEVER global!)
+#     - dimension: 768
+#     (Do NOT enable a static apiKey in production Cloud Run deployments!)
+embeddingModels: {}
+
+# TODO(Lab 6): Configure `authServices` with `google-corp-oidc`:
+#   - type: google
+#   - clientId: ${GOOGLE_OAUTH_CLIENT_ID}
+#   This binds `@caller_email` server-side from verified OIDC JWT claims and
+#   strips `@caller_email` from the LLM tool schema so prompt injection fails closed!
+authServices: {}
+
+tools:
+  # PROVIDED REFERENCE TOOL — study the curated `spanner-sql`, `readOnly: true`,
+  # and strict `allowedValues` / `minValue` / `maxValue` parameter validation pattern.
+  get_service_ownership_and_slas:
+    type: spanner-sql
+    source: sdlc-spanner
+    readOnly: true
+    description: >-
+      Looks up microservice ownership, tier, criticality, SLA targets, Slack
+      escalation channels, and exposed API catalogs by service_id or domain.
+    statement: |
+      SELECT
+        s.service_id,
+        s.service_name,
+        s.tier,
+        s.criticality,
+        s.sla_target_pct,
+        s.domain,
+        s.lifecycle_status,
+        o.owner_id,
+        o.team_name,
+        o.org_unit,
+        o.slack_channel,
+        ARRAY(
+          SELECT AS STRUCT
+            a.api_id,
+            a.http_method,
+            a.http_path,
+            a.lifecycle_status,
+            a.is_public,
+            a.latency_budget_ms
+          FROM Apis AS a
+          WHERE a.service_id = s.service_id
+          ORDER BY a.api_id ASC
+        ) AS exposed_apis
+      FROM Services AS s
+      JOIN Owners AS o ON s.owner_id = o.owner_id
+      WHERE (@service_id = '' OR s.service_id = @service_id)
+        AND (@domain = '' OR s.domain = @domain)
+      ORDER BY
+        CASE s.tier
+          WHEN 'TIER_0' THEN 1
+          WHEN 'TIER_1' THEN 2
+          ELSE 3
+        END ASC,
+        s.service_id ASC
+      LIMIT @max_rows
+    parameters:
+      - name: service_id
+        type: string
+        description: Optional canonical service ID (e.g., svc-payments); empty string lists matching domain
+        default: ""
+        allowedValues:
+          - "^$"
+          - "^svc-[a-z0-9-]+$"
+      - name: domain
+        type: string
+        description: Optional business domain filter (empty string returns all domains)
+        default: ""
+        allowedValues:
+          - ""
+          - "payments"
+          - "checkout"
+          - "finance"
+          - "orders"
+          - "ecosystem"
+          - "messaging"
+          - "analytics"
+          - "security"
+          - "risk"
+          - "merchandising"
+      - name: max_rows
+        type: integer
+        description: Maximum services to return
+        default: 12
+        minValue: 1
+        maxValue: 50
+
+  # TODO(Lab 6): Add the remaining 5 curated `spanner-sql` tools matching
+  #   `solution/mcp/tools.yaml` (ZERO raw SQL execution tools!):
+  #     1. `analyze_api_blast_radius_graphrag` (readOnly: true, uses `valueFromParam` + `embeddedBy: gemini-embedder`)
+  #     2. `search_sdlc_knowledge_hybrid`      (readOnly: true, uses `valueFromParam` + `embeddedBy: gemini-embedder`)
+  #     3. `list_my_team_assets`               (readOnly: true, `authRequired: [google-corp-oidc]`, server-bound `@caller_email`)
+  #     4. `draft_adr_proposal`                (readOnly: false, `authRequired: [google-corp-oidc]`, strictly inserts PROPOSED ADRs)
+  #     5. `audit_compliance_blast_radius`     (readOnly: true, queries `SecurityComplianceImpactView`)
+
+# TODO(Lab 6): Define the 3 isolated per-persona `toolsets`:
+#   - `impact-analyst-toolset`   (4 readOnly tools — NO `draft_adr_proposal`, NO `audit_compliance_blast_radius`)
+#   - `adr-curator-toolset`      (4 readOnly tools + `draft_adr_proposal` — NO `audit_compliance_blast_radius`)
+#   - `security-auditor-toolset` (3 shared readOnly tools + `audit_compliance_blast_radius` — ZERO write tools)
+toolsets: {}

@@ -1,0 +1,42 @@
+# Environment & local credentials (NEVER commit secrets!)
+.env
+.env.local
+.env.*.local
+*.json.key
+*-sa-key.json
+credentials.json
+
+# Python virtualenvs, caches & test artifacts
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Local Neo4j CE APOC export staging & temporary outputs
+data/structured/export/
+data/structured/import/
+/tmp/
+
+# Downloaded MCP Toolbox binary & local caches
+solution/mcp/bin/
+starter/mcp/bin/
+node_modules/
+
+# Optional legacy IDE symlink directories (created only with --link-legacy)
+.agent/
+
+# OS & editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/*.local.json
