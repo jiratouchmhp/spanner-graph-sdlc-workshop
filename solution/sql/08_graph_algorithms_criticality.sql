@@ -28,7 +28,7 @@
 -- 1. Algorithm-Compatible Interleaved Edge Table (ServiceDependsOnAlgo)
 --    Leading PK column MUST match parent PK name (`service_id` -> `Services`).
 -- -----------------------------------------------------------------------------
-CREATE TABLE ServiceDependsOnAlgo (
+CREATE TABLE IF NOT EXISTS ServiceDependsOnAlgo (
   service_id STRING(64) NOT NULL,
   to_service_id STRING(64) NOT NULL,
   dependency_type STRING(32) NOT NULL,
@@ -44,9 +44,10 @@ CREATE TABLE ServiceDependsOnAlgo (
 -- 2. Schema-Free Algorithm Output Persistence Table (ServiceAlgoProperty)
 --    Tagged by algo_run_id so iterative experiments persist without ALTER TABLE.
 -- -----------------------------------------------------------------------------
-CREATE TABLE ServiceAlgoProperty (
+CREATE TABLE IF NOT EXISTS ServiceAlgoProperty (
   service_id STRING(64) NOT NULL,
   algo_run_id STRING(200) NOT NULL,
+  target_service_id STRING(64),
   int_val INT64,
   float_val FLOAT64,
 ) PRIMARY KEY (service_id, algo_run_id),
@@ -172,6 +173,7 @@ CALL ShortestPath(
 RETURN
   source_node.service_id AS service_id,
   'shortest_path_to_svc_payments_v1' AS algo_run_id,
+  target_node.service_id AS target_service_id,
   PATH_LENGTH(path) AS int_val,
   cost AS float_val;
 

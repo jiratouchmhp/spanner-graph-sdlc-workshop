@@ -7,7 +7,10 @@
         "@toolbox-sdk/server",
         "--config",
         "${WORKSPACE_ROOT}/solution/mcp/personas/tools.impact-analyst.yaml",
-        "--stdio"
+        "--stdio",
+        "--allowed-hosts=localhost,127.0.0.1",
+        "--allowed-origins=http://localhost:5000,http://127.0.0.1:5000",
+        "--disable-version-check"
       ],
       "env": {
         "SPANNER_PROJECT": "${GOOGLE_CLOUD_PROJECT}",
@@ -22,9 +25,12 @@
     "sdlc-spanner-impact-analyst-local-bin": {
       "command": "${WORKSPACE_ROOT}/solution/mcp/bin/toolbox",
       "args": [
-        "--tools-file",
+        "--config",
         "${WORKSPACE_ROOT}/solution/mcp/personas/tools.impact-analyst.yaml",
-        "--stdio"
+        "--stdio",
+        "--allowed-hosts=localhost,127.0.0.1",
+        "--allowed-origins=http://localhost:5000,http://127.0.0.1:5000",
+        "--disable-version-check"
       ],
       "env": {
         "SPANNER_PROJECT": "${GOOGLE_CLOUD_PROJECT}",

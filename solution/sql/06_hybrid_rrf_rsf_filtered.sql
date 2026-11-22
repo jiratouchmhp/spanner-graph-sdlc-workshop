@@ -98,7 +98,10 @@ ORDER BY f.rrf_score DESC, f.chunk_id ASC;
 --   Preserves continuous score margins using weighted min-max normalization
 --   (0.60 semantic similarity + 0.40 lexical FTS score). Guards against
 --   zero-variance denominators when a retriever returns 1 match or tied scores.
+--   Note: @{optimizer_version=latest} ensures Spanner uses optimizer >= 6 for
+--   SCORE() inside a CTE referenced by both FULL OUTER JOIN and bounds CTEs.
 -- =============================================================================
+@{optimizer_version=latest}
 WITH
   ann_raw AS (
     SELECT

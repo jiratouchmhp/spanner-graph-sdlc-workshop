@@ -29,10 +29,11 @@ Before executing any state-mutating command against a live GCP project or remote
 4. **Production Compute Floor (`>= 1,000` PUs)**: Provision at least **1 node (`1,000` PUs)** for production. Granular instances (`100`–`900` PUs) run on a single server task per zone (non-linear scaling, intermittent latency spikes) and cannot use Managed Autoscaler or `move-instance`.
 5. **Southeast Asia Regional Topology**: No pre-built Bangkok + Singapore dual-region or multi-region config exists. For Thailand PDPA residency, run `regional-asia-southeast3` (Bangkok, 3-zone sync quorum, `99.99%` SLA) on `ENTERPRISE`, pair with regional Vertex AI endpoints in `asia-southeast1` (Singapore, ~25 ms RTT), and replicate backups or Change Streams async DR to `regional-asia-southeast1`.
 6. **Read-Only Replicas Are Not Standalone DR**: RO replicas do not vote in Paxos quorum and cannot become leader; if the primary voting quorum fails, RO replicas also go offline and cannot serve even stale reads.
-7. **Deletion Protection Blind Spots**: `--enable-drop-protection` is CLI/API-only, is NOT inherited by restored databases, must be disabled on every database before deleting an instance, and does NOT block GCP project deletion or Free Trial 90+30-day permanent expiration.
+7. **Deletion Protection Blind Spots**: `--enable-drop-protection` / `--no-enable-drop-protection` is a CLI/API-only **`databases update`** flag (NOT an `instances update` flag), is NOT inherited by restored databases, must be disabled on every database before deleting an instance, and does NOT block GCP project deletion or Free Trial 90+30-day permanent expiration.
 8. **Queue At-Most-Once `OUT_OF_RANGE` Trap**: `DELETE ... ASSERT_ROWS_MODIFIED 1` fails at the **statement level** with `OUT_OF_RANGE` if a message was already acked, and does **not** auto-rollback the transaction. Never catch `OUT_OF_RANGE` and commit — always let the error abort the transaction.
 9. **Emulator Divergences**: Never validate production readiness on the emulator alone. It skips IAM/FGAC, returns empty `PLAN`/`PROFILE`, ignores `ANALYZE` and `enable_drop_protection`, locks the entire database on RW/DDL, and fails to reject non-partitionable PDML or `PartitionQuery`.
 10. **Zero-Downtime `move-instance` Backup Blocker**: Instance moves fail if *any* backup or backup schedule (including the automatic default schedule) exists on the instance. Copy backups to temporary 100-PU placeholder instances in source and destination configs first.
+11. **Instance Display Name (`--description`) Length Limit**: `gcloud spanner instances create --description="..."` maps to `instance.display_name`, which the Spanner Admin API strictly limits to **4–30 characters** (longer values fail with `INVALID_ARGUMENT`). Keep instance descriptions concise (especially when interpolating region names).
 
 ## Platform Decision Matrix
 
@@ -58,13 +59,14 @@ Before executing any state-mutating command against a live GCP project or remote
 gcloud services enable spanner.googleapis.com --project="{project_id}"
 
 # Production instance (>= 1,000 PUs; use --processing-units=100 only for non-prod/dev)
+# NOTE: --description maps to instance.display_name and MUST be 4-30 characters long.
 gcloud spanner instances create "{instance_id}" \
   --project="{project_id}" \
   --config="regional-asia-southeast3" \
   --edition="ENTERPRISE" \
   --nodes=1 \
   --default-backup-schedule-type=AUTOMATIC \
-  --description="Production Enterprise Regional Instance"
+  --description="Production Enterprise BKK"
 
 # Create GoogleSQL database, enable CLI-only drop protection, and set 7-day PITR
 gcloud spanner databases create "{database_id}" \

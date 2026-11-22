@@ -6,7 +6,9 @@
 - **Primary Antigravity Skill:** [`spanner-migration-and-neo4j-playbook`](../.agents/skills/spanner-migration-and-neo4j-playbook/SKILL.md)
 - **Support Skills:** [`spanner-graph-modeling-and-gql`](../.agents/skills/spanner-graph-modeling-and-gql/SKILL.md), [`sdlc-graphrag-workshop-guide`](../.agents/skills/sdlc-graphrag-workshop-guide/SKILL.md)
 - **Hands-On Starter File:** [`starter/sql/09_opencypher_to_gql_cookbook.sql`](../starter/sql/09_opencypher_to_gql_cookbook.sql) (`TODO(Lab 1)`)
-- **Reference Solution:** [`solution/sql/09_opencypher_to_gql_cookbook.sql`](../solution/sql/09_opencypher_to_gql_cookbook.sql), [`data/structured/`](../data/structured/README.md)
+- **Reference Solution:** [`solution/sql/09_opencypher_to_gql_cookbook.sql`](../solution/sql/09_opencypher_to_gql_cookbook.sql), [`data/structured/no_docker_neo4j_sim.py`](../data/structured/no_docker_neo4j_sim.py), [`data/structured/`](../data/structured/README.md)
+
+> **Zero-Docker vs. With-Docker Path:** Docker Desktop is **100% optional**! Run `make preflight && make lab1-no-docker` right away for the full in-memory Neo4j CE + APOC streaming export simulation (`< 2s`, pure Python stdlib, 15/15 SHA-256 APOC parity). Use **Section 3B (Optional With-Docker)** only if you have Docker Desktop and want to run a live Neo4j 5 CE container.
 
 ---
 
@@ -37,9 +39,38 @@ Neo4j Community Edition (CE) is popular for early internal SDLC catalogs, but pr
 
 ---
 
-## 3. Optional Local Neo4j 5 CE + APOC Export Walkthrough (Track B)
+## 3. Hands-On Neo4j CE & APOC Streaming Export Walkthrough
 
-The repository already ships pre-exported canonical CSVs and JSONLs under `data/structured/` so **Docker is completely optional**. On Track B (8-hour deep-dive), run the live Neo4j CE export loop to verify byte-for-byte parity:
+### Path A (Default — Zero-Docker Neo4j CE & APOC Simulator)
+
+No Docker Desktop required! Run the pure-stdlib **Zero-Docker Neo4j CE & APOC Streaming Simulator** (`data/structured/no_docker_neo4j_sim.py`) directly from the repository root to experience all 4 migration proof points in under 2 seconds:
+
+```bash
+# 1. Confirm your workstation is ready (Python 3.10+, regional defaults, Zero-Docker confirmed)
+make preflight
+
+# 2. Run the full 4-section Zero-Docker Neo4j CE & APOC simulator + Lab 1 parity check
+make lab1-no-docker
+```
+
+What `make lab1-no-docker` executes live in your terminal:
+1. **Source Graph & Topological Traps:** Loads all `68` nodes + `174` explicit M:N + `60` dual-projected N:1 = `234` edges with uniqueness constraints (`svc-auth` hub in-degree `10`, `svc-analytics` `DATA_FEED`, `svc-billing -> api-payments-charge-v1` legacy `AT_RISK`, `svc-orders <-> svc-notifications` cycle).
+2. **`WALK` vs. `TRAIL` Cycle Explosion Demo:** Compares default ISO GQL `WALK` against edge-unique `MATCH TRAIL` upstream from `svc-checkout` across depths 1–10.
+3. **Hero Blast-Radius & Trap Comparisons:** Replays the deterministic 7-row `api-payments-charge-v2` blast radius and contrasts `OPTIONAL MATCH ... WHERE` against post-join `FILTER`.
+4. **Heap-Safe Streaming APOC Export & SHA-256 Parity:** Contrasts naive `collect(x)` JVM heap OOM pressure vs `{ batchSize: 5000, separateHeader: true }`, writes headerless CSVs to a temp dir, and diffs against canonical CSVs via `stage_apoc_export.py --diff-apoc-dir` (**15/15 SHA-256 byte-for-byte parity**).
+
+Explore individual simulator queries or stage headerless CSVs anytime:
+
+```bash
+python3 data/structured/no_docker_neo4j_sim.py --list-queries
+python3 data/structured/no_docker_neo4j_sim.py --query walk_vs_trail
+python3 data/structured/no_docker_neo4j_sim.py --export-dir /tmp/acme-apoc-export --diff
+python3 data/structured/stage_apoc_export.py
+```
+
+### Path B (Optional With-Docker — Live Local Neo4j 5 CE Container)
+
+If you have Docker Desktop installed on Track B (8-hour deep-dive) and want to run the real Neo4j 5 CE container alongside the simulator:
 
 ```bash
 cd data/structured
@@ -57,12 +88,6 @@ docker compose exec -T neo4j \
 
 # 4. Validate referential integrity & diff the APOC export against canonical CSVs
 python3 stage_apoc_export.py --diff-apoc-dir ./export
-```
-
-Even without Docker, run the offline staging & parity validator from the repository root:
-
-```bash
-python3 data/structured/stage_apoc_export.py
 ```
 
 ---
@@ -100,14 +125,20 @@ Open [`starter/sql/09_opencypher_to_gql_cookbook.sql`](../starter/sql/09_opencyp
 ### Verify Lab 1 Offline
 
 ```bash
-# Confirm your starter/ edits pass every Lab 1 ISO GQL & staging check
+# Track B (8h Deep-Dive, default MODE=full): verify all 5 ISO GQL queries + APOC parity
 make TRACK=starter verify-lab LAB=1
+
+# Track A (4h Express): verify core Exercises 1-3 (MATCH TRAIL, FOR, SAFE_TO_JSON)
+make TRACK=starter MODE=express verify-lab LAB=1
+
+# Run simulator + starter cookbook check together
+make TRACK=starter lab1-no-docker
 
 # Compare against the verified reference cookbook if stuck
 diff -u starter/sql/09_opencypher_to_gql_cookbook.sql solution/sql/09_opencypher_to_gql_cookbook.sql
 ```
 
-**Checkpoint Expected Output:** `[PASS] Lab 1 (starter/)` and `[OK] Verified 1/1 lab(s) on track=starter.`
+**Checkpoint Expected Output:** `[PASS] Lab 1 (starter/, mode=full)` (or `mode=express`) and `[OK] Verified 1/1 lab(s) on track=starter.`
 
 ---
 

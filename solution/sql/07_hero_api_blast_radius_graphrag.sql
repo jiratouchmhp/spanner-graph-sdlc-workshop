@@ -43,7 +43,7 @@ WITH
     SELECT
       chunk_id,
       COSINE_DISTANCE(embedding, @query_vec) AS distance
-    FROM DocumentChunks @{scan_method=batch}
+    FROM DocumentChunks
     WHERE embedding IS NOT NULL
     ORDER BY distance ASC
     LIMIT 20

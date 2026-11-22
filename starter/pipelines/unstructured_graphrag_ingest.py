@@ -5,7 +5,7 @@ Antigravity Skills for Lab 3:
   - Primary: .agents/skills/spanner-schema-and-data-modeling/SKILL.md
   - Support: .agents/skills/spanner-search-ai-and-graphrag/SKILL.md
 
-Your Task (`TODO(Lab 3)`):
+Lab 3 Exercise:
   Implement `extract_chunks_and_mentions()` below to process all 45 Acme Commerce
   unstructured Markdown artifacts under `data/unstructured/`:
     1. Deterministically split each Markdown file on H2 (`## `) headings
@@ -238,15 +238,32 @@ def extract_chunks_and_mentions(
            `DIR_TO_CHUNK_PREFIX`, extract the H1 document title, and split the
            body on H2 (`## `) section headings (using `_split_oversized_section()`
            for long sections).
+           Note for `owners/team_charters.md` (`doc_type == "owner"`): skip its
+           short H1 preamble (`heading == "Overview"` and `len(body) < 350`) and
+           extract each section's `entity_id` from the H2 heading via
+           `re.match(r"(team-[a-z0-9-]+)", heading)` (all other folders use `md_path.stem`).
         3. Emit deterministic `chunk_id` values (`<= 64` chars), SHA-256
            `content_hash`, `source_path` relative to `repo_root`, `section_heading`,
-           `chunk_index`, `content`, `char_count`, and `embedding: None`.
+           `chunk_index`, `content`, `char_count`, `embedding: None`, and
+           `embedding_model_version: None` (all keys in `CORE_DOCUMENT_CHUNK_COLUMNS`
+           plus `char_count`).
         4. Run every regex in `ENTITY_MENTION_PATTERNS` over each chunk's content,
            filter matches against `canonical_ids`, and emit deduplicated
            `ChunkEntityMentions` dicts (`chunk_id`, `entity_type`, `entity_id`,
-           `mention_source="REGEX_EXTRACT"`).
-        5. Return `(chunks, mentions, stats)` matching
-           `solution/pipelines/unstructured_graphrag_ingest.py`.
+           `mention_source="REGEX_EXTRACT"` — matching `CORE_MENTION_COLUMNS`).
+        5. Return `(chunks, mentions, stats)` where `stats` includes the exact keys
+           accessed by `main()`:
+           ```python
+           {
+               "markdown_files_processed": len(md_files),
+               "total_chunks": len(chunks),
+               "total_mentions": len(mentions),
+               "max_chunk_chars": max((c["char_count"] for c in chunks), default=0),
+               "unique_entities_linked": len({m["entity_id"] for m in mentions}),
+               "chunks_by_doc_type": ...,
+               "mentions_by_entity_type": ...,
+           }
+           ```
     """
     raise NotImplementedError(
         "TODO(Lab 3): implement markdown chunking and entity mention extraction"

@@ -98,13 +98,41 @@ class SecurityPolicyError(PermissionError):
     """Raised when an agent attempts an unauthorized tool or parameter action."""
 
 
+def _parse_yaml_scalar(raw_val: str) -> Any:
+    """Parse a simple YAML scalar or inline empty dict/list using stdlib only."""
+    vs = raw_val.strip()
+    if vs == "{}":
+        return {}
+    if vs == "[]":
+        return []
+    if vs.startswith("[") and vs.endswith("]"):
+        inner = vs[1:-1].strip()
+        if not inner:
+            return []
+        return [_parse_yaml_scalar(part) for part in inner.split(",")]
+    if vs.startswith('"') and vs.endswith('"') and len(vs) >= 2:
+        return vs[1:-1].replace("\\\\", "\\").replace('\\"', '"')
+    if vs.startswith("'") and vs.endswith("'") and len(vs) >= 2:
+        return vs[1:-1].replace("''", "'")
+    low = vs.lower()
+    if low == "true":
+        return True
+    if low == "false":
+        return False
+    if low in ("null", "~"):
+        return None
+    if re.fullmatch(r"-?\d+", vs):
+        return int(vs)
+    return vs
+
+
 def _parse_yaml_stdlib_fallback(text: str) -> dict[str, Any]:
     """Minimal stdlib parser fallback when PyYAML is unavailable in --mock mode.
 
     Handles both PyYAML default sequence indentation (0-offset `- `) and
     2-space indented sequences (`  - `), extracting sources, embeddingModels,
-    authServices, tools (readOnly, authRequired, parameters, authServices,
-    valueFromParam, embeddedBy), and toolsets.
+    authServices, tools (readOnly, statement, authRequired, parameters,
+    allowedValues, authServices, valueFromParam, embeddedBy), and toolsets.
     """
     result: dict[str, Any] = {
         "sources": {},
@@ -117,112 +145,176 @@ def _parse_yaml_stdlib_fallback(text: str) -> dict[str, Any]:
     cur_item: str | None = None
     cur_sub: str | None = None
     cur_param: dict[str, Any] | None = None
-    in_statement = False
+    block_field: str | None = None
+    block_indent: int = 0
+    block_lines: list[str] = []
     param_item_indent: int | None = None
     param_prop_indent: int | None = None
-    in_param_auth = False
+    param_list_key: str | None = None
     auth_item_indent: int | None = None
 
+    def _flush_block() -> None:
+        nonlocal block_field, block_lines
+        if block_field and section == "tools" and cur_item and cur_item in result["tools"]:
+            joiner = "\n" if block_field == "statement" else " "
+            result["tools"][cur_item][block_field] = joiner.join(block_lines).strip()
+        block_field = None
+        block_lines = []
+
     for raw_line in text.splitlines():
+        if block_field is not None:
+            if not raw_line.strip():
+                if block_field == "statement":
+                    block_lines.append("")
+                continue
+            cur_indent = len(raw_line) - len(raw_line.lstrip(" "))
+            if cur_indent >= block_indent:
+                block_lines.append(
+                    raw_line[block_indent:] if block_field == "statement" else raw_line.strip()
+                )
+                continue
+            _flush_block()
+
         if not raw_line.strip() or raw_line.lstrip().startswith("#"):
             continue
         indent = len(raw_line) - len(raw_line.lstrip(" "))
         stripped = raw_line.strip()
+        if "#" in stripped and not stripped.startswith("- "):
+            in_q: str | None = None
+            cut_idx: int | None = None
+            for idx, ch in enumerate(stripped):
+                if ch in ("'", '"'):
+                    if in_q is None:
+                        in_q = ch
+                    elif in_q == ch:
+                        in_q = None
+                elif ch == "#" and in_q is None and (idx == 0 or stripped[idx - 1].isspace()):
+                    cut_idx = idx
+                    break
+            if cut_idx is not None:
+                stripped = stripped[:cut_idx].rstrip()
+                if not stripped:
+                    continue
 
-        if indent == 0 and stripped.endswith(":"):
-            section = stripped[:-1]
+        if indent == 0 and ":" in stripped:
+            key, rest = stripped.split(":", 1)
+            section = key.strip()
             cur_item = None
             cur_sub = None
             cur_param = None
-            in_statement = False
-            in_param_auth = False
             param_item_indent = None
-            result.setdefault(section, {})
+            param_prop_indent = None
+            param_list_key = None
+            auth_item_indent = None
+            rest_s = rest.strip()
+            if rest_s:
+                result[section] = _parse_yaml_scalar(rest_s)
+            else:
+                result.setdefault(section, {})
             continue
-
-        if in_statement and indent >= 6:
-            continue
-        if indent <= 4 and not stripped.startswith("- "):
-            in_statement = False
 
         if section in ("sources", "embeddingModels", "authServices"):
+            if not isinstance(result.get(section), dict):
+                result[section] = {}
             if indent == 2 and stripped.endswith(":"):
-                cur_item = stripped[:-1]
+                cur_item = stripped[:-1].strip()
                 result[section][cur_item] = {}
             elif indent == 4 and cur_item and ":" in stripped:
                 k, v = stripped.split(":", 1)
-                val: Any = v.strip().strip('"').strip("'")
-                if val.isdigit():
-                    val = int(val)
-                result[section][cur_item][k.strip()] = val
+                result[section][cur_item][k.strip()] = _parse_yaml_scalar(v)
         elif section == "toolsets":
-            if indent == 2 and not stripped.startswith("- ") and stripped.endswith(":"):
-                cur_item = stripped[:-1]
-                result["toolsets"][cur_item] = []
+            if not isinstance(result.get("toolsets"), dict):
+                result["toolsets"] = {}
+            if indent == 2 and not stripped.startswith("- ") and ":" in stripped:
+                k, v = stripped.split(":", 1)
+                cur_item = k.strip()
+                result["toolsets"][cur_item] = _parse_yaml_scalar(v) if v.strip() else []
             elif cur_item and stripped.startswith("- ") and indent in (2, 4):
-                result["toolsets"][cur_item].append(stripped[2:].strip())
+                result["toolsets"][cur_item].append(_parse_yaml_scalar(stripped[2:]))
         elif section == "tools":
+            if not isinstance(result.get("tools"), dict):
+                result["tools"] = {}
             if indent == 2 and not stripped.startswith("- ") and stripped.endswith(":"):
-                cur_item = stripped[:-1]
+                cur_item = stripped[:-1].strip()
                 result["tools"][cur_item] = {"parameters": [], "authRequired": []}
                 cur_sub = None
                 cur_param = None
-                in_param_auth = False
                 param_item_indent = None
                 param_prop_indent = None
+                param_list_key = None
+                auth_item_indent = None
             elif cur_item and cur_sub == "authRequired" and stripped.startswith("- ") and indent in (4, 6):
-                result["tools"][cur_item]["authRequired"].append(stripped[2:].strip())
+                result["tools"][cur_item]["authRequired"].append(_parse_yaml_scalar(stripped[2:]))
             elif (
                 cur_item
-                and cur_sub == "parameters"
+                and cur_sub in ("parameters", "templateParameters")
                 and stripped.startswith("- name:")
                 and (
                     (param_item_indent is None and indent in (4, 6))
                     or (param_item_indent is not None and indent == param_item_indent)
                 )
             ):
-                cur_param = {"name": stripped.split(":", 1)[1].strip()}
-                result["tools"][cur_item]["parameters"].append(cur_param)
+                cur_param = {"name": _parse_yaml_scalar(stripped.split(":", 1)[1])}
+                result["tools"][cur_item].setdefault(cur_sub, []).append(cur_param)
                 param_item_indent = indent
                 param_prop_indent = indent + 2
-                in_param_auth = False
+                param_list_key = None
                 auth_item_indent = None
             elif indent == 4 and cur_item and not stripped.startswith("- "):
-                in_param_auth = False
                 cur_param = None
                 param_item_indent = None
-                if stripped.startswith("statement:"):
-                    in_statement = True
-                    cur_sub = "statement"
-                elif stripped.endswith(":"):
-                    cur_sub = stripped[:-1]
-                    if cur_sub not in result["tools"][cur_item]:
-                        result["tools"][cur_item][cur_sub] = []
-                elif ":" in stripped:
+                param_prop_indent = None
+                param_list_key = None
+                auth_item_indent = None
+                if ":" in stripped:
                     k, v = stripped.split(":", 1)
                     k = k.strip()
                     vs = v.strip()
-                    if vs.lower() == "true":
-                        result["tools"][cur_item][k] = True
-                    elif vs.lower() == "false":
-                        result["tools"][cur_item][k] = False
+                    if vs in ("|", "|-", ">", ">-"):
+                        block_field = k
+                        block_indent = 6
+                        block_lines = []
+                        cur_sub = k
+                    elif not vs:
+                        cur_sub = k
+                        result["tools"][cur_item].setdefault(k, [])
                     else:
-                        result["tools"][cur_item][k] = vs.strip('"').strip("'")
-                    cur_sub = k
+                        result["tools"][cur_item][k] = _parse_yaml_scalar(vs)
+                        cur_sub = k
             elif cur_param is not None and param_prop_indent is not None:
-                if in_param_auth and stripped.startswith("- name:") and indent in (param_prop_indent, param_prop_indent + 2):
-                    cur_param["authServices"].append({"name": stripped.split(":", 1)[1].strip()})
+                if (
+                    param_list_key == "authServices"
+                    and stripped.startswith("- name:")
+                    and indent in (param_prop_indent, param_prop_indent + 2)
+                ):
+                    cur_param["authServices"].append({"name": _parse_yaml_scalar(stripped.split(":", 1)[1])})
                     auth_item_indent = indent + 2
-                elif in_param_auth and auth_item_indent is not None and indent == auth_item_indent and stripped.startswith("field:"):
-                    cur_param["authServices"][-1]["field"] = stripped.split(":", 1)[1].strip()
-                elif indent == param_prop_indent and not stripped.startswith("- "):
-                    if stripped == "authServices:":
-                        cur_param["authServices"] = []
-                        in_param_auth = True
-                    elif ":" in stripped:
-                        in_param_auth = False
-                        k, v = stripped.split(":", 1)
-                        cur_param[k.strip()] = v.strip().strip('"').strip("'")
+                elif (
+                    param_list_key == "authServices"
+                    and auth_item_indent is not None
+                    and indent == auth_item_indent
+                    and stripped.startswith("field:")
+                ):
+                    cur_param["authServices"][-1]["field"] = _parse_yaml_scalar(stripped.split(":", 1)[1])
+                elif (
+                    param_list_key == "allowedValues"
+                    and stripped.startswith("- ")
+                    and indent in (param_prop_indent, param_prop_indent + 2)
+                ):
+                    cur_param["allowedValues"].append(_parse_yaml_scalar(stripped[2:]))
+                elif indent == param_prop_indent and not stripped.startswith("- ") and ":" in stripped:
+                    k, v = stripped.split(":", 1)
+                    k = k.strip()
+                    vs = v.strip()
+                    if not vs and k in ("authServices", "allowedValues"):
+                        cur_param[k] = []
+                        param_list_key = k
+                        auth_item_indent = None
+                    else:
+                        param_list_key = None
+                        auth_item_indent = None
+                        cur_param[k] = _parse_yaml_scalar(vs)
+    _flush_block()
     return result
 
 

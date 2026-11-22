@@ -48,8 +48,9 @@ Before executing any command that mutates live cloud infrastructure or database 
 6. **Mandatory IAM Condition on `roles/spanner.databaseRoleUser`:** Omitting `--condition` restricting `resource.type == "spanner.googleapis.com/DatabaseRole"` and `resource.name.endsWith("/{role_name}")` grants access to **all** database roles in the database.
 7. **Remote MCP `create_session` `readOnlyHint: false` Trap:** In `https://spanner.googleapis.com/mcp`, `create_session` has `readOnlyHint: false`. Any IAM Deny Policy blocking `tool.isReadOnly == false` **must** exempt `create_session` using `!(api.getAttribute('mcp.googleapis.com/tool.name', '') == 'create_session')`, or read-only agents cannot run `execute_sql_readonly`.
 8. **Zero Grants on `public` & Re-Runnable View Grants:** Never grant base-table access to the `public` system role (leaks to all current and future roles). Always re-apply `GRANT SELECT ON VIEW` after every `CREATE OR REPLACE VIEW`. Parameterized views lack a PostgreSQL `security_barrier`—never expose raw ad-hoc SQL to untrusted users even over parameterized views.
-9. **Hardened Cloud Run Networking:** Deploy MCP Toolbox with `--no-allow-unauthenticated`, `--port=8080`, `--address=0.0.0.0`, exact `--allowed-hosts` and `--allowed-origins` (mitigates DNS rebinding), `--logging-format=JSON`, `--telemetry-gcp`, and `--sql-commenter`. Do **not** put Cloud Run MCP Toolbox behind IAP (unsupported).
+9. **Hardened Cloud Run & CLI Networking (`v1.13.1+`):** Always pass canonical `--config` (legacy `--tools-file` is deprecated and warns). In `v1.13.1+`, legacy `/api/toolset` and `/api/tool/.../invoke` HTTP routes return **`HTTP 410 Gone`** — always use Streamable HTTP JSON-RPC 2.0 on **`/mcp`** and **`/mcp/{toolset}`**. Deploy MCP Toolbox with `--no-allow-unauthenticated`, `--port=8080`, `--address=0.0.0.0`, exact `--allowed-hosts` and `--allowed-origins` (mitigates DNS rebinding and silences wildcard `*` warnings even in `--stdio` mode), `--logging-format=JSON`, `--telemetry-gcp`, `--sql-commenter`, `--disable-reload`, and `--disable-version-check`. Do **not** put Cloud Run MCP Toolbox behind IAP (unsupported).
 10. **Regional Data Residency & PDPA Alignment:** Co-locate Spanner (`regional-asia-southeast3`, Bangkok) with Cloud Run MCP Toolbox and a regional CMEK key (`asia-southeast3`). Route Vertex AI (`gemini-embedding-001`, `gemini-2.5-flash`), cross-region DR backup copies, and regional Model Armor templates (`modelarmor.asia-southeast1.rep.googleapis.com`, ~25 ms RTT) to Singapore (`asia-southeast1`)—and explicitly assess Thailand PDPA impact before enabling Model Armor floor settings on managed remote MCP servers (cross-jurisdictional routing).
+11. **Spanner MCP SQL & Automation Hygiene:** Never project nullable `ARRAY<STRUCT<...>>` scalar subqueries (`(SELECT ARRAY_AGG(...) FROM ...)`) in `spanner-sql` tools — use `ARRAY(SELECT AS STRUCT ...)` (guarantees non-null `[]`) to avoid `Unimplemented: Unsupported query shape: null-valued array of struct`. Prefix multi-referenced FTS `SCORE()` CTEs with `@{optimizer_version=latest}`. In provisioning scripts, add a 3–8s IAM propagation retry loop after creating Service Accounts before calling `gcloud spanner databases add-iam-policy-binding`, and match `could not be found` for idempotent `gcloud run services delete` 404 checks.
 
 ---
 
@@ -76,7 +77,16 @@ In Antigravity **Agent Panel > Menu > MCP Servers > Manage MCP Servers > View ra
   "mcpServers": {
     "spanner-local-curated": {
       "command": "npx",
-      "args": ["-y", "@toolbox-sdk/server", "--config", "/abs/path/to/tools.yaml", "--stdio"],
+      "args": [
+        "-y",
+        "@toolbox-sdk/server",
+        "--config",
+        "/abs/path/to/tools.yaml",
+        "--stdio",
+        "--allowed-hosts=localhost,127.0.0.1",
+        "--allowed-origins=http://localhost:5000,http://127.0.0.1:5000",
+        "--disable-version-check"
+      ],
       "env": {
         "SPANNER_PROJECT": "{project_id}",
         "SPANNER_INSTANCE": "{instance_id}",
@@ -146,7 +156,7 @@ parameters:
     type: string
     description: Order status filter
     default: ACTIVE
-    allowedValues: ["ACTIVE", "PROCESSING", "SHIPPED", "DELIVERED"]
+    allowedValues: ["^ACTIVE$", "^PROCESSING$", "^SHIPPED$", "^DELIVERED$"]
   - name: max_rows
     type: integer
     description: Maximum rows to return

@@ -48,7 +48,10 @@ To expose ONLY the least-privilege, read-only **Impact Analyst** persona tools (
            "@toolbox-sdk/server",
            "--config",
            "/abs/path/to/spanner-graph-sdlc-workshop/solution/mcp/personas/tools.impact-analyst.yaml",
-           "--stdio"
+           "--stdio",
+           "--allowed-hosts=localhost,127.0.0.1",
+           "--allowed-origins=http://localhost:5000,http://127.0.0.1:5000",
+           "--disable-version-check"
          ],
          "env": {
            "SPANNER_PROJECT": "YOUR_GCP_PROJECT_ID",
@@ -66,7 +69,7 @@ To expose ONLY the least-privilege, read-only **Impact Analyst** persona tools (
 
 ---
 
-## Method 3: Local `./toolbox` Binary (`--tools-file ... --stdio`)
+## Method 3: Local `./toolbox` Binary (`--config ... --stdio`)
 
 If you prefer running the compiled Go binary without Node.js/`npx` (also required by binary-only MCP clients):
 
@@ -79,7 +82,7 @@ If you prefer running the compiled Go binary without Node.js/`npx` (also require
    bash solution/mcp/run_toolbox_stdio.sh --dry-run
    TOOLBOX_PERSONA=impact-analyst bash solution/mcp/run_toolbox_stdio.sh --http
    ```
-3. Configure Antigravity's `mcp_config.json` with `"command": "/abs/path/to/solution/mcp/bin/toolbox"` and `"args": ["--tools-file", "/abs/path/to/solution/mcp/personas/tools.impact-analyst.yaml", "--stdio"]` (v1 CLI also accepts canonical `--config`).
+3. Configure Antigravity's `mcp_config.json` with `"command": "/abs/path/to/solution/mcp/bin/toolbox"` and `"args": ["--config", "/abs/path/to/solution/mcp/personas/tools.impact-analyst.yaml", "--stdio", "--allowed-hosts=localhost,127.0.0.1", "--allowed-origins=http://localhost:5000,http://127.0.0.1:5000", "--disable-version-check"]` (always use canonical `--config`; legacy `--tools-file` is deprecated in `v1.13.1`).
 
 ---
 

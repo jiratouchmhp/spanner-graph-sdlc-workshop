@@ -80,23 +80,32 @@ fi
 
 if [[ -x "${SCRIPT_DIR}/bin/toolbox" ]]; then
   CMD=("${SCRIPT_DIR}/bin/toolbox")
-  # Both --tools-file and v1 --config are supported; use --tools-file for broad binary compatibility.
-  CONFIG_FLAG="--tools-file"
 else
   CMD=("npx" "-y" "@toolbox-sdk/server")
-  CONFIG_FLAG="--config"
 fi
+# Canonical v1.13.1 flag (--tools-file is deprecated and emits a warning).
+CONFIG_FLAG="--config"
+
+# SECURITY: Never leave --allowed-hosts="*" or --allowed-origins="*" even on
+# 127.0.0.1 or --stdio (prevents DNS-rebinding attacks and silences v1.13.1 wildcard WARNs).
+COMMON_SECURITY_ARGS=(
+  "--allowed-hosts=localhost,127.0.0.1"
+  "--allowed-origins=http://localhost:${LOCAL_PORT},http://127.0.0.1:${LOCAL_PORT}"
+  "--disable-version-check"
+)
 
 if [[ "${MODE}" == "stdio" ]]; then
-  ARGS=("${CONFIG_FLAG}" "${TOOLS_FILE}" "--stdio")
+  ARGS=(
+    "${CONFIG_FLAG}" "${TOOLS_FILE}"
+    "--stdio"
+    "${COMMON_SECURITY_ARGS[@]}"
+  )
 else
-  # SECURITY: Never leave --allowed-hosts="*" even on 127.0.0.1 (prevents DNS-rebinding attacks).
   ARGS=(
     "${CONFIG_FLAG}" "${TOOLS_FILE}"
     "--address=127.0.0.1"
     "--port=${LOCAL_PORT}"
-    "--allowed-hosts=localhost,127.0.0.1"
-    "--allowed-origins=http://localhost:${LOCAL_PORT},http://127.0.0.1:${LOCAL_PORT}"
+    "${COMMON_SECURITY_ARGS[@]}"
     "--logging-format=JSON"
     "--sql-commenter"
   )

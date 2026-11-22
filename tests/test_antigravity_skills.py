@@ -277,6 +277,40 @@ class TestAntigravitySkills(unittest.TestCase):
                 for expected_token in ("Acme Commerce", "api-payments-charge-v2", "SdlcGraph", "TODO(Lab"):
                     self.assertIn(expected_token, combined)
 
+    def test_spanner_instance_create_descriptions_within_api_length_bounds(self) -> None:
+        """Every gcloud spanner instances create --description in skills stays within 4-30 chars."""
+        bash_block_re = re.compile(r"```(?:bash|sh)\n(.*?)```", re.DOTALL)
+        create_cmd_re = re.compile(
+            r"gcloud\s+spanner\s+instances\s+create\s+(?:[^\n]*\\\n)*[^\n]*",
+            re.MULTILINE,
+        )
+        desc_re = re.compile(r'--description=(?:"([^"]+)"|\'([^\']+)\'|(\S+))')
+        checked = 0
+        for md_file in sorted(SKILLS_DIR.rglob("*.md")):
+            text = md_file.read_text(encoding="utf-8")
+            rel = md_file.relative_to(REPO_ROOT)
+            for block_m in bash_block_re.finditer(text):
+                for match in create_cmd_re.finditer(block_m.group(1)):
+                    cmd_block = match.group(0)
+                    dm = desc_re.search(cmd_block)
+                    self.assertIsNotNone(
+                        dm, f"Missing --description on gcloud spanner instances create in {rel}"
+                    )
+                    desc_val = next(g for g in dm.groups() if g is not None)
+                    checked += 1
+                    self.assertGreaterEqual(
+                        len(desc_val),
+                        4,
+                        f"Spanner instance --description too short (<4 chars) in {rel}: {desc_val!r}",
+                    )
+                    self.assertLessEqual(
+                        len(desc_val),
+                        30,
+                        f"Spanner instance --description exceeds 30-char API limit in {rel}: "
+                        f"{desc_val!r} ({len(desc_val)} chars)",
+                    )
+        self.assertGreaterEqual(checked, 5)
+
 
 if __name__ == "__main__":
     unittest.main()

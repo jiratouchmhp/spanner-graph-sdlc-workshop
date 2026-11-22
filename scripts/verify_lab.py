@@ -114,8 +114,228 @@ def _run_py(cmd: list[str], label: str, failures: list[str]) -> subprocess.Compl
     return proc
 
 
+def _parse_yaml_scalar(raw_val: str) -> Any:
+    """Parse a simple YAML scalar or inline empty dict/list using stdlib only."""
+    vs = raw_val.strip()
+    if vs == "{}":
+        return {}
+    if vs == "[]":
+        return []
+    if vs.startswith("[") and vs.endswith("]"):
+        inner = vs[1:-1].strip()
+        if not inner:
+            return []
+        return [_parse_yaml_scalar(part) for part in inner.split(",")]
+    if (vs.startswith('"') and vs.endswith('"') and len(vs) >= 2):
+        # Handle basic double-quoted YAML escapes (e.g. \\. -> \.)
+        return vs[1:-1].replace("\\\\", "\\").replace('\\"', '"')
+    if (vs.startswith("'") and vs.endswith("'") and len(vs) >= 2):
+        return vs[1:-1].replace("''", "'")
+    low = vs.lower()
+    if low == "true":
+        return True
+    if low == "false":
+        return False
+    if low in ("null", "~"):
+        return None
+    if re.fullmatch(r"-?\d+", vs):
+        return int(vs)
+    return vs
+
+
+def _parse_yaml_stdlib_fallback(text: str) -> dict[str, Any]:
+    """Self-contained stdlib YAML parser fallback for MCP Toolbox tools.yaml.
+
+    Works with zero third-party packages and zero dependency on `solution/`,
+    handling both 0-offset and 2-space indented sequences, inline `[]`/`{}`,
+    literal/folded block scalars (`|`/`>-`), `allowedValues`, `authRequired`,
+    `authServices`, `templateParameters`, `valueFromParam`, and `embeddedBy`.
+    """
+    result: dict[str, Any] = {
+        "sources": {},
+        "embeddingModels": {},
+        "authServices": {},
+        "tools": {},
+        "toolsets": {},
+    }
+    section: str | None = None
+    cur_item: str | None = None
+    cur_sub: str | None = None
+    cur_param: dict[str, Any] | None = None
+    block_field: str | None = None
+    block_indent: int = 0
+    block_lines: list[str] = []
+    param_item_indent: int | None = None
+    param_prop_indent: int | None = None
+    param_list_key: str | None = None
+    auth_item_indent: int | None = None
+
+    def _flush_block() -> None:
+        nonlocal block_field, block_lines
+        if block_field and section == "tools" and cur_item and cur_item in result["tools"]:
+            joiner = "\n" if block_field == "statement" else " "
+            result["tools"][cur_item][block_field] = joiner.join(block_lines).strip()
+        block_field = None
+        block_lines = []
+
+    for raw_line in text.splitlines():
+        if block_field is not None:
+            if not raw_line.strip():
+                if block_field == "statement":
+                    block_lines.append("")
+                continue
+            cur_indent = len(raw_line) - len(raw_line.lstrip(" "))
+            if cur_indent >= block_indent:
+                block_lines.append(raw_line[block_indent:] if block_field == "statement" else raw_line.strip())
+                continue
+            _flush_block()
+
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        stripped = raw_line.strip()
+        # Strip trailing inline comments outside quotes
+        if "#" in stripped and not stripped.startswith("- "):
+            in_q: str | None = None
+            cut_idx: int | None = None
+            for idx, ch in enumerate(stripped):
+                if ch in ("'", '"'):
+                    if in_q is None:
+                        in_q = ch
+                    elif in_q == ch:
+                        in_q = None
+                elif ch == "#" and in_q is None and (idx == 0 or stripped[idx - 1].isspace()):
+                    cut_idx = idx
+                    break
+            if cut_idx is not None:
+                stripped = stripped[:cut_idx].rstrip()
+                if not stripped:
+                    continue
+
+        if indent == 0 and ":" in stripped:
+            key, rest = stripped.split(":", 1)
+            section = key.strip()
+            cur_item = None
+            cur_sub = None
+            cur_param = None
+            param_item_indent = None
+            param_prop_indent = None
+            param_list_key = None
+            auth_item_indent = None
+            rest_s = rest.strip()
+            if rest_s:
+                result[section] = _parse_yaml_scalar(rest_s)
+            else:
+                result.setdefault(section, {})
+            continue
+
+        if section in ("sources", "embeddingModels", "authServices"):
+            if not isinstance(result.get(section), dict):
+                result[section] = {}
+            if indent == 2 and stripped.endswith(":"):
+                cur_item = stripped[:-1].strip()
+                result[section][cur_item] = {}
+            elif indent == 4 and cur_item and ":" in stripped:
+                k, v = stripped.split(":", 1)
+                result[section][cur_item][k.strip()] = _parse_yaml_scalar(v)
+        elif section == "toolsets":
+            if not isinstance(result.get("toolsets"), dict):
+                result["toolsets"] = {}
+            if indent == 2 and not stripped.startswith("- ") and ":" in stripped:
+                k, v = stripped.split(":", 1)
+                cur_item = k.strip()
+                result["toolsets"][cur_item] = _parse_yaml_scalar(v) if v.strip() else []
+            elif cur_item and stripped.startswith("- ") and indent in (2, 4):
+                result["toolsets"][cur_item].append(_parse_yaml_scalar(stripped[2:]))
+        elif section == "tools":
+            if not isinstance(result.get("tools"), dict):
+                result["tools"] = {}
+            if indent == 2 and not stripped.startswith("- ") and stripped.endswith(":"):
+                cur_item = stripped[:-1].strip()
+                result["tools"][cur_item] = {"parameters": [], "authRequired": []}
+                cur_sub = None
+                cur_param = None
+                param_item_indent = None
+                param_prop_indent = None
+                param_list_key = None
+                auth_item_indent = None
+            elif cur_item and cur_sub == "authRequired" and stripped.startswith("- ") and indent in (4, 6):
+                result["tools"][cur_item]["authRequired"].append(_parse_yaml_scalar(stripped[2:]))
+            elif (
+                cur_item
+                and cur_sub in ("parameters", "templateParameters")
+                and stripped.startswith("- name:")
+                and (
+                    (param_item_indent is None and indent in (4, 6))
+                    or (param_item_indent is not None and indent == param_item_indent)
+                )
+            ):
+                cur_param = {"name": _parse_yaml_scalar(stripped.split(":", 1)[1])}
+                result["tools"][cur_item].setdefault(cur_sub, []).append(cur_param)
+                param_item_indent = indent
+                param_prop_indent = indent + 2
+                param_list_key = None
+                auth_item_indent = None
+            elif indent == 4 and cur_item and not stripped.startswith("- "):
+                cur_param = None
+                param_item_indent = None
+                param_prop_indent = None
+                param_list_key = None
+                auth_item_indent = None
+                if ":" in stripped:
+                    k, v = stripped.split(":", 1)
+                    k = k.strip()
+                    vs = v.strip()
+                    if vs in ("|", "|-", ">", ">-"):
+                        block_field = k
+                        block_indent = 6
+                        block_lines = []
+                        cur_sub = k
+                    elif not vs:
+                        cur_sub = k
+                        result["tools"][cur_item].setdefault(k, [])
+                    else:
+                        result["tools"][cur_item][k] = _parse_yaml_scalar(vs)
+                        cur_sub = k
+            elif cur_param is not None and param_prop_indent is not None:
+                if (
+                    param_list_key == "authServices"
+                    and stripped.startswith("- name:")
+                    and indent in (param_prop_indent, param_prop_indent + 2)
+                ):
+                    cur_param["authServices"].append({"name": _parse_yaml_scalar(stripped.split(":", 1)[1])})
+                    auth_item_indent = indent + 2
+                elif (
+                    param_list_key == "authServices"
+                    and auth_item_indent is not None
+                    and indent == auth_item_indent
+                    and stripped.startswith("field:")
+                ):
+                    cur_param["authServices"][-1]["field"] = _parse_yaml_scalar(stripped.split(":", 1)[1])
+                elif (
+                    param_list_key == "allowedValues"
+                    and stripped.startswith("- ")
+                    and indent in (param_prop_indent, param_prop_indent + 2)
+                ):
+                    cur_param["allowedValues"].append(_parse_yaml_scalar(stripped[2:]))
+                elif indent == param_prop_indent and not stripped.startswith("- ") and ":" in stripped:
+                    k, v = stripped.split(":", 1)
+                    k = k.strip()
+                    vs = v.strip()
+                    if not vs and k in ("authServices", "allowedValues"):
+                        cur_param[k] = []
+                        param_list_key = k
+                        auth_item_indent = None
+                    else:
+                        param_list_key = None
+                        auth_item_indent = None
+                        cur_param[k] = _parse_yaml_scalar(vs)
+    _flush_block()
+    return result
+
+
 def _load_yaml_safe(path: Path) -> dict[str, Any]:
-    """Load tools.yaml using PyYAML if available, else stdlib fallback from solution/mcp."""
+    """Load tools.yaml using PyYAML if available, else self-contained stdlib fallback."""
     text = path.read_text(encoding="utf-8")
     try:
         import yaml  # type: ignore
@@ -125,9 +345,6 @@ def _load_yaml_safe(path: Path) -> dict[str, Any]:
             raise ValueError("YAML root is not a mapping")
         return data
     except ImportError:
-        sys.path.insert(0, str(REPO_ROOT / "solution" / "mcp"))
-        from adk_multi_agent_demo import _parse_yaml_stdlib_fallback  # type: ignore
-
         return _parse_yaml_stdlib_fallback(text)
 
 
@@ -136,7 +353,7 @@ def _load_yaml_safe(path: Path) -> dict[str, Any]:
 # -----------------------------------------------------------------------------
 
 
-def verify_lab_1(track: str) -> tuple[bool, list[str], list[str]]:
+def verify_lab_1(track: str, mode: str = "full") -> tuple[bool, list[str], list[str]]:
     """Lab 1: Neo4j CE Export & openCypher -> ISO GQL Parity."""
     failures: list[str] = []
     notes: list[str] = []
@@ -144,22 +361,30 @@ def verify_lab_1(track: str) -> tuple[bool, list[str], list[str]]:
     raw = _read_text(REPO_ROOT / rel, failures)
     if raw is not None:
         before = len(failures)
-        _assert_no_todo(raw, rel, failures)
-        sql = strip_sql_comments(raw)
-        _assert_patterns(
-            sql,
-            rel,
-            [
-                ("GRAPH SdlcGraph header", r"\bGRAPH\s+SdlcGraph\b"),
-                ("MATCH TRAIL cycle-safe traversal", r"\bMATCH\s+TRAIL\b"),
-                ("FOR array unnest (replacing UNWIND)", r"\bFOR\s+[a-zA-Z_]\w*\s+IN\b"),
-                ("SAFE_TO_JSON node serialization", r"\bSAFE_TO_JSON\s*\("),
-                ("RETURN ... ORDER BY ... LIMIT", r"\bRETURN\b.*?\bORDER\s+BY\b.*?\bLIMIT\b"),
-                ("OPTIONAL MATCH ... WHERE predicate", r"\bOPTIONAL\s+MATCH\b.*?\bWHERE\b"),
-            ],
-            failures,
-        )
-        _note_if_clean(before, failures, notes, f"Verified ISO GQL translations in {rel}")
+        check_raw = raw
+        if mode == "express":
+            # Track A (4h Express) scope: Exercises 1-3 (MATCH TRAIL, FOR, SAFE_TO_JSON)
+            ex4_match = re.search(r"^--\s*Exercise\s+4\b", raw, re.IGNORECASE | re.MULTILINE)
+            if ex4_match:
+                check_raw = raw[: ex4_match.start()]
+        _assert_no_todo(check_raw, rel, failures)
+        sql = strip_sql_comments(check_raw)
+        patterns = [
+            ("GRAPH SdlcGraph header", r"\bGRAPH\s+SdlcGraph\b"),
+            ("MATCH TRAIL cycle-safe traversal", r"\bMATCH\s+TRAIL\b"),
+            ("FOR array unnest (replacing UNWIND)", r"\bFOR\s+[a-zA-Z_]\w*\s+IN\b"),
+            ("SAFE_TO_JSON node serialization", r"\bSAFE_TO_JSON\s*\("),
+        ]
+        if mode != "express":
+            patterns.extend(
+                [
+                    ("RETURN ... ORDER BY ... LIMIT", r"\bRETURN\b.*?\bORDER\s+BY\b.*?\bLIMIT\b"),
+                    ("OPTIONAL MATCH ... WHERE predicate", r"\bOPTIONAL\s+MATCH\b.*?\bWHERE\b"),
+                ]
+            )
+        _assert_patterns(sql, rel, patterns, failures)
+        scope_label = "Track A Express (Exercises 1-3)" if mode == "express" else "all 5 ISO GQL translations"
+        _note_if_clean(before, failures, notes, f"Verified {scope_label} in {rel}")
 
     if _run_py(
         [sys.executable, "data/structured/stage_apoc_export.py"],
@@ -170,7 +395,7 @@ def verify_lab_1(track: str) -> tuple[bool, list[str], list[str]]:
     return not failures, failures, notes
 
 
-def verify_lab_2(track: str) -> tuple[bool, list[str], list[str]]:
+def verify_lab_2(track: str, mode: str = "full") -> tuple[bool, list[str], list[str]]:
     """Lab 2: Two-Path SDLC Corpus & 4-Tier Parity Validation."""
     failures: list[str] = []
     notes: list[str] = []
@@ -227,28 +452,34 @@ def verify_lab_2(track: str) -> tuple[bool, list[str], list[str]]:
     raw = _read_text(REPO_ROOT / rel, failures)
     if raw is not None:
         before = len(failures)
-        _assert_no_todo(raw, rel, failures)
-        sql = strip_sql_comments(raw)
-        _assert_patterns(
-            sql,
-            rel,
-            [
-                ("DocumentChunks Path B check", r"\bDocumentChunks\b"),
-                ("High-fanin hub svc-auth check", r"'svc-auth'"),
-                ("Async DATA_FEED check", r"'DATA_FEED'"),
-                ("Legacy AT_RISK consumer check", r"'AT_RISK'"),
-                ("Logical edge parity (234)", r"\b234\b"),
-                ("Tier 4 deterministic hash (SHA256 / FARM_FINGERPRINT)", r"\b(SHA256|FARM_FINGERPRINT)\s*\("),
-            ],
-            failures,
-        )
-        _note_if_clean(before, failures, notes, f"Verified 4-tier parity SQL in {rel}")
+        check_raw = raw
+        if mode == "express":
+            # Track A (4h Express) scope: Tiers 1-3 (Tier 4 row-hash checksum is Track B)
+            t4_match = re.search(r"^--\s*TIER\s+4\b", raw, re.IGNORECASE | re.MULTILINE)
+            if t4_match:
+                check_raw = raw[: t4_match.start()]
+        _assert_no_todo(check_raw, rel, failures)
+        sql = strip_sql_comments(check_raw)
+        patterns = [
+            ("DocumentChunks Path B check", r"\bDocumentChunks\b"),
+            ("High-fanin hub svc-auth check", r"'svc-auth'"),
+            ("Async DATA_FEED check", r"'DATA_FEED'"),
+            ("Legacy AT_RISK consumer check", r"'AT_RISK'"),
+            ("Logical edge parity (234)", r"\b234\b"),
+        ]
+        if mode != "express":
+            patterns.append(
+                ("Tier 4 deterministic hash (SHA256 / FARM_FINGERPRINT)", r"\b(SHA256|FARM_FINGERPRINT)\s*\(")
+            )
+        _assert_patterns(sql, rel, patterns, failures)
+        scope_label = "Track A Express (Tiers 1-3)" if mode == "express" else "4-tier parity SQL"
+        _note_if_clean(before, failures, notes, f"Verified {scope_label} in {rel}")
 
     return not failures, failures, notes
 
 
-def verify_lab_3(track: str) -> tuple[bool, list[str], list[str]]:
-    """Lab 3: Schema Design, Post-Load Indexes & Path A/B Ingestion (4 files)."""
+def verify_lab_3(track: str, mode: str = "full") -> tuple[bool, list[str], list[str]]:
+    """Lab 3: Schema Design, Post-Load Indexes & Path A/B Ingestion (2 SQL Express / 4 files Full)."""
     failures: list[str] = []
     notes: list[str] = []
 
@@ -263,8 +494,8 @@ def verify_lab_3(track: str) -> tuple[bool, list[str], list[str]]:
             sql_01,
             rel_01,
             [
-                ("ServiceCallsApi interleaved in parent Services ON DELETE CASCADE", r"CREATE\s+TABLE\s+ServiceCallsApi\b.*?\bINTERLEAVE\s+IN\s+PARENT\s+Services\s+ON\s+DELETE\s+CASCADE"),
-                ("ServiceDependsOnService table definition", r"CREATE\s+TABLE\s+ServiceDependsOnService\b.*?\bPRIMARY\s+KEY\s*\(\s*from_service_id\s*,\s*to_service_id\s*\)"),
+                ("ServiceCallsApi interleaved in parent Services ON DELETE CASCADE", r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?ServiceCallsApi\b.*?\bINTERLEAVE\s+IN\s+PARENT\s+Services\s+ON\s+DELETE\s+CASCADE"),
+                ("ServiceDependsOnService table definition", r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?ServiceDependsOnService\b.*?\bPRIMARY\s+KEY\s*\(\s*from_service_id\s*,\s*to_service_id\s*\)"),
                 ("ChunkCitesApiView with SQL SECURITY INVOKER", r"CREATE\s+(?:OR\s+REPLACE\s+)?VIEW\s+ChunkCitesApiView\s+SQL\s+SECURITY\s+INVOKER\b"),
                 ("CREATE PROPERTY GRAPH SdlcGraph", r"CREATE\s+(?:OR\s+REPLACE\s+)?PROPERTY\s+GRAPH\s+SdlcGraph\b"),
                 ("768-dim FLOAT32 embedding column (INV-08)", r"ARRAY\s*<\s*FLOAT32\s*>\s*\(\s*vector_length\s*=>\s*768\s*\)"),
@@ -272,7 +503,7 @@ def verify_lab_3(track: str) -> tuple[bool, list[str], list[str]]:
             failures,
         )
         # INV-06 check: ServiceDependsOnService must NOT combine INTERLEAVE IN PARENT Services ON DELETE CASCADE with self-ref cascading FK
-        dep_stmt = re.search(r"CREATE\s+TABLE\s+ServiceDependsOnService\b.*?;", sql_01, re.IGNORECASE | re.DOTALL)
+        dep_stmt = re.search(r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?ServiceDependsOnService\b.*?;", sql_01, re.IGNORECASE | re.DOTALL)
         if dep_stmt and re.search(r"\bINTERLEAVE\s+IN\s+PARENT\s+Services\b", dep_stmt.group(0), re.IGNORECASE):
             failures.append(f"{rel_01} violates INV-06: ServiceDependsOnService must be a standalone dual-FK table (no INTERLEAVE IN PARENT Services)")
         _note_if_clean(before, failures, notes, f"Verified core DDL & SdlcGraph in {rel_01}")
@@ -296,6 +527,10 @@ def verify_lab_3(track: str) -> tuple[bool, list[str], list[str]]:
         )
         _note_if_clean(before, failures, notes, f"Verified post-load covering/FTS/ScaNN indexes in {rel_03}")
 
+    if mode == "express":
+        notes.append("Express mode (Track A): skipped Track B Python loaders (neo4j_to_spanner_loader.py & unstructured_graphrag_ingest.py)")
+        return not failures, failures, notes
+
     # File 3: neo4j_to_spanner_loader.py
     rel_p1 = f"{track}/pipelines/neo4j_to_spanner_loader.py"
     raw_p1 = _read_text(REPO_ROOT / rel_p1, failures)
@@ -317,8 +552,8 @@ def verify_lab_3(track: str) -> tuple[bool, list[str], list[str]]:
     return not failures, failures, notes
 
 
-def verify_lab_4(track: str) -> tuple[bool, list[str], list[str]]:
-    """Lab 4: Multi-Model Search Strategies & Data Boost Graph Algorithms (2 files)."""
+def verify_lab_4(track: str, mode: str = "full") -> tuple[bool, list[str], list[str]]:
+    """Lab 4: Multi-Model Search Strategies & Data Boost Graph Algorithms (1 file Express / 2 files Full)."""
     failures: list[str] = []
     notes: list[str] = []
 
@@ -344,6 +579,10 @@ def verify_lab_4(track: str) -> tuple[bool, list[str], list[str]]:
         )
         _note_if_clean(before, failures, notes, f"Verified 7 search strategy benchmarks in {rel_05}")
 
+    if mode == "express":
+        notes.append("Express mode (Track A): skipped Track B Data Boost Graph Algorithms (08_graph_algorithms_criticality.sql)")
+        return not failures, failures, notes
+
     rel_08 = f"{track}/sql/08_graph_algorithms_criticality.sql"
     raw_08 = _read_text(REPO_ROOT / rel_08, failures)
     if raw_08 is not None:
@@ -354,7 +593,7 @@ def verify_lab_4(track: str) -> tuple[bool, list[str], list[str]]:
             sql_08,
             rel_08,
             [
-                ("ServiceDependsOnAlgo table", r"CREATE\s+TABLE\s+ServiceDependsOnAlgo\b"),
+                ("ServiceDependsOnAlgo table", r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?ServiceDependsOnAlgo\b"),
                 ("INTERLEAVE IN PARENT Services ON DELETE CASCADE", r"INTERLEAVE\s+IN\s+PARENT\s+Services\s+ON\s+DELETE\s+CASCADE"),
                 ("NOT ENFORCED destination FK (INV-06)", r"FOREIGN\s+KEY\s*\(\s*to_service_id\s*\)\s+REFERENCES\s+Services\s*\(\s*service_id\s*\)\s+NOT\s+ENFORCED"),
                 ("Table-backed SdlcAlgoGraph", r"CREATE\s+(?:OR\s+REPLACE\s+)?PROPERTY\s+GRAPH\s+SdlcAlgoGraph\b"),
@@ -367,8 +606,9 @@ def verify_lab_4(track: str) -> tuple[bool, list[str], list[str]]:
     return not failures, failures, notes
 
 
-def verify_lab_5(track: str) -> tuple[bool, list[str], list[str]]:
+def verify_lab_5(track: str, mode: str = "full") -> tuple[bool, list[str], list[str]]:
     """Lab 5: Hybrid Retrieval (RRF/RSF/Filtered) & Hero Blast-Radius GraphRAG."""
+    del mode  # Both Lab 5 files are core to Track A Express and Track B Full
     failures: list[str] = []
     notes: list[str] = []
 
@@ -416,26 +656,34 @@ def verify_lab_5(track: str) -> tuple[bool, list[str], list[str]]:
         )
         _note_if_clean(before, failures, notes, f"Verified Hero Blast-Radius GraphRAG SQL in {rel_07}")
 
-    proc = _run_py(
-        [
-            sys.executable,
-            "solution/pipelines/hero_blast_radius_offline.py",
-            "--api-id",
-            "api-payments-charge-v2",
-            "--check-fixture",
-            "solution/sql/fixtures/07_hero_expected_rows.json",
-        ],
-        "Offline Hero 7-row fixture replay",
-        failures,
-    )
-    if proc is not None:
-        notes.append("Hero 7-row blast radius, 5 ADRs, 5 REQs & 9 Markdown citations matched fixture 100%")
+    hero_script = REPO_ROOT / "solution" / "pipelines" / "hero_blast_radius_offline.py"
+    hero_fixture = REPO_ROOT / "solution" / "sql" / "fixtures" / "07_hero_expected_rows.json"
+    if hero_script.is_file() and hero_fixture.is_file():
+        proc = _run_py(
+            [
+                sys.executable,
+                "solution/pipelines/hero_blast_radius_offline.py",
+                "--api-id",
+                "api-payments-charge-v2",
+                "--check-fixture",
+                "solution/sql/fixtures/07_hero_expected_rows.json",
+            ],
+            "Offline Hero 7-row fixture replay",
+            failures,
+        )
+        if proc is not None:
+            notes.append("Hero 7-row blast radius, 5 ADRs, 5 REQs & 9 Markdown citations matched fixture 100%")
+    elif track == "solution":
+        failures.append("Missing solution/pipelines/hero_blast_radius_offline.py or 07_hero_expected_rows.json")
+    else:
+        notes.append("Starter-only workspace: skipped reference solution/ Hero offline fixture replay")
 
     return not failures, failures, notes
 
 
-def verify_lab_6(track: str) -> tuple[bool, list[str], list[str]]:
+def verify_lab_6(track: str, mode: str = "full") -> tuple[bool, list[str], list[str]]:
     """Lab 6: MCP Toolbox, Per-Agent RBAC, FGAC Views & Prompt-Injection Demo (3 files)."""
+    del mode  # All 3 Lab 6 files are core to Track A Express and Track B Full
     failures: list[str] = []
     notes: list[str] = []
 
@@ -506,11 +754,28 @@ def verify_lab_6(track: str) -> tuple[bool, list[str], list[str]]:
                     failures.append(f"{rel_yaml} tool '{tname}' uses forbidden type 'spanner-execute-sql'")
                 if "templateParameters" in tcfg:
                     failures.append(f"{rel_yaml} tool '{tname}' uses forbidden 'templateParameters'")
+                for param in tcfg.get("parameters") or []:
+                    if not isinstance(param, dict):
+                        continue
+                    for pat in param.get("allowedValues") or []:
+                        if not isinstance(pat, str) or not (pat.startswith("^") and pat.endswith("$")):
+                            failures.append(
+                                f"{rel_yaml} tool '{tname}' param '{param.get('name')}' has unanchored "
+                                f"allowedValues {pat!r}; anchor with '^...$' (bare '' matches all strings in Toolbox v1.13.1)"
+                            )
 
             toolsets = cfg.get("toolsets") or {}
             for ts_name in ("impact-analyst-toolset", "adr-curator-toolset", "security-auditor-toolset"):
                 if ts_name not in toolsets or not toolsets[ts_name]:
                     failures.append(f"{rel_yaml} missing required persona toolset '{ts_name}'")
+                else:
+                    for tname in toolsets[ts_name]:
+                        if tname not in tools:
+                            failures.append(f"{rel_yaml} toolset '{ts_name}' references undefined tool '{tname}'")
+                        elif ts_name in ("impact-analyst-toolset", "security-auditor-toolset") and not tools[tname].get("readOnly", False):
+                            failures.append(
+                                f"{rel_yaml} read-only toolset '{ts_name}' must not expose non-readOnly tool '{tname}'"
+                            )
 
             _note_if_clean(before, failures, notes, f"Verified MCP Toolbox YAML security contract in {rel_yaml}")
 
@@ -526,47 +791,52 @@ def verify_lab_6(track: str) -> tuple[bool, list[str], list[str]]:
     return not failures, failures, notes
 
 
-def verify_lab_7(track: str) -> tuple[bool, list[str], list[str]]:
+def verify_lab_7(track: str, mode: str = "full") -> tuple[bool, list[str], list[str]]:
     """Lab 7: Enterprise Sizing, Verified Bangkok/Singapore Pricing & Worksheet."""
+    del mode  # Worksheet & sizing calculator are core to both Track A and Track B
     failures: list[str] = []
     notes: list[str] = []
 
-    proc = _run_py(
-        [
-            sys.executable,
-            "solution/tools/sizing_calculator.py",
-            "--preset",
-            "all",
-            "--region",
-            "asia-southeast3",
-            "--dr-backup-region",
-            "asia-southeast1",
-            "--json",
-        ],
-        "sizing_calculator.py --preset all --json",
-        failures,
-    )
-    if proc is not None:
-        try:
-            data = json.loads(proc.stdout)
-            bkk_rate = data["pricing_regions"]["asia-southeast3"]["compute_per_node_hour_usd"]["enterprise"]
-            if abs(bkk_rate - 1.2915) > 1e-6:
-                failures.append(f"Bangkok Enterprise rate mismatch: {bkk_rate} != 1.2915")
-            by_name = {s["name"]: s for s in data.get("scenarios", [])}
-            if set(by_name.keys()) != {"workshop", "small", "medium", "large"}:
-                failures.append(f"Unexpected preset set: {sorted(by_name.keys())}")
-            else:
-                if by_name["workshop"]["compute"]["is_production_eligible"] is not False:
-                    failures.append("workshop 100-PU preset must report is_production_eligible=False")
-                for prod_preset in ("small", "medium", "large"):
-                    sc = by_name[prod_preset]
-                    if sc["compute"]["processing_units"] < 1000:
-                        failures.append(f"Preset {prod_preset} fell below 1,000 PU production floor")
-                    if sc["legacy_3_store_tco"]["savings_vs_infra_only"]["spanner_cud_3yr"]["monthly_usd"] <= 0:
-                        failures.append(f"Preset {prod_preset} expected positive 3-store TCO savings")
-            notes.append("Verified Bangkok 2026 rate card ($1.2915/node-hr) & all 4 sizing presets")
-        except (KeyError, json.JSONDecodeError) as exc:
-            failures.append(f"Invalid JSON from sizing_calculator.py: {exc}")
+    calc_path = REPO_ROOT / "solution" / "tools" / "sizing_calculator.py"
+    if calc_path.is_file():
+        proc = _run_py(
+            [
+                sys.executable,
+                "solution/tools/sizing_calculator.py",
+                "--preset",
+                "all",
+                "--region",
+                "asia-southeast3",
+                "--dr-backup-region",
+                "asia-southeast1",
+                "--json",
+            ],
+            "sizing_calculator.py --preset all --json",
+            failures,
+        )
+        if proc is not None:
+            try:
+                data = json.loads(proc.stdout)
+                bkk_rate = data["pricing_regions"]["asia-southeast3"]["compute_per_node_hour_usd"]["enterprise"]
+                if abs(bkk_rate - 1.2915) > 1e-6:
+                    failures.append(f"Bangkok Enterprise rate mismatch: {bkk_rate} != 1.2915")
+                by_name = {s["name"]: s for s in data.get("scenarios", [])}
+                if set(by_name.keys()) != {"workshop", "small", "medium", "large"}:
+                    failures.append(f"Unexpected preset set: {sorted(by_name.keys())}")
+                else:
+                    if by_name["workshop"]["compute"]["is_production_eligible"] is not False:
+                        failures.append("workshop 100-PU preset must report is_production_eligible=False")
+                    for prod_preset in ("small", "medium", "large"):
+                        sc = by_name[prod_preset]
+                        if sc["compute"]["processing_units"] < 1000:
+                            failures.append(f"Preset {prod_preset} fell below 1,000 PU production floor")
+                        if sc["legacy_3_store_tco"]["savings_vs_infra_only"]["spanner_cud_3yr"]["monthly_usd"] <= 0:
+                            failures.append(f"Preset {prod_preset} expected positive 3-store TCO savings")
+                notes.append("Verified Bangkok 2026 rate card ($1.2915/node-hr) & all 4 sizing presets")
+            except (KeyError, json.JSONDecodeError) as exc:
+                failures.append(f"Invalid JSON from sizing_calculator.py: {exc}")
+    elif track == "solution":
+        failures.append("Missing solution/tools/sizing_calculator.py")
 
     worksheet_rel = "starter/tools/customer_scale_worksheet.json"
     worksheet_path = REPO_ROOT / worksheet_rel
@@ -584,20 +854,23 @@ def verify_lab_7(track: str) -> tuple[bool, list[str], list[str]]:
                     )
             except json.JSONDecodeError as exc:
                 failures.append(f"{worksheet_rel} is invalid JSON: {exc}")
-            if _run_py(
-                [
-                    sys.executable,
-                    "solution/tools/sizing_calculator.py",
-                    "--worksheet",
-                    worksheet_rel,
-                    "--json",
-                ],
-                f"sizing_calculator.py --worksheet {worksheet_rel}",
-                failures,
-            ):
-                _note_if_clean(before, failures, notes, f"Validated completed worksheet {worksheet_rel}")
+            if calc_path.is_file():
+                if _run_py(
+                    [
+                        sys.executable,
+                        "solution/tools/sizing_calculator.py",
+                        "--worksheet",
+                        worksheet_rel,
+                        "--json",
+                    ],
+                    f"sizing_calculator.py --worksheet {worksheet_rel}",
+                    failures,
+                ):
+                    _note_if_clean(before, failures, notes, f"Validated completed worksheet {worksheet_rel}")
+            else:
+                _note_if_clean(before, failures, notes, f"Validated JSON & COMPLETED status in {worksheet_rel}")
     else:
-        if worksheet_path.is_file():
+        if worksheet_path.is_file() and calc_path.is_file():
             if _run_py(
                 [
                     sys.executable,
@@ -614,8 +887,9 @@ def verify_lab_7(track: str) -> tuple[bool, list[str], list[str]]:
     return not failures, failures, notes
 
 
-def verify_lab_8(track: str) -> tuple[bool, list[str], list[str]]:
+def verify_lab_8(track: str, mode: str = "full") -> tuple[bool, list[str], list[str]]:
     """Lab 8: Observability, Spanner Studio Viz, Provisioning Defaults & 8 Skills."""
+    del mode  # Observability pack is core to both Track A and Track B
     failures: list[str] = []
     notes: list[str] = []
 
@@ -632,7 +906,7 @@ def verify_lab_8(track: str) -> tuple[bool, list[str], list[str]]:
                 ("Spanner Studio SAFE_TO_JSON path visualization", r"\bSAFE_TO_JSON\s*\("),
                 ("Query Insights (SPANNER_SYS.QUERY_STATS_TOP_HOUR)", r"SPANNER_SYS\.QUERY_STATS_TOP_HOUR\b"),
                 ("Lock Insights (SPANNER_SYS.LOCK_STATS_TOP_HOUR)", r"SPANNER_SYS\.LOCK_STATS_TOP_HOUR\b"),
-                ("Microsecond-to-second lock percentile conversion (/ 1000000)", r"1000000"),
+                ("Microsecond-to-second lock percentile conversion (/ 1000000.0 or / 1e6)", r"(?:1000000(?:\.0+)?|1e6)"),
                 ("Pre-splitting introspection (SPANNER_SYS.USER_SPLIT_POINTS)", r"SPANNER_SYS\.USER_SPLIT_POINTS\b"),
             ],
             failures,
@@ -675,17 +949,18 @@ LAB_VERIFIERS = {
 }
 
 
-def run_labs(track: str, labs: list[int]) -> dict[str, Any]:
+def run_labs(track: str, labs: list[int], mode: str = "full") -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     all_passed = True
     for lab_id in labs:
-        passed, failures, notes = LAB_VERIFIERS[lab_id](track)
+        passed, failures, notes = LAB_VERIFIERS[lab_id](track, mode=mode)
         if not passed:
             all_passed = False
         results.append(
             {
                 "lab": lab_id,
                 "track": track,
+                "mode": mode,
                 "passed": passed,
                 "notes": notes,
                 "failures": failures,
@@ -693,6 +968,7 @@ def run_labs(track: str, labs: list[int]) -> dict[str, Any]:
         )
     return {
         "track": track,
+        "mode": mode,
         "labs_checked": labs,
         "all_passed": all_passed,
         "results": results,
@@ -745,6 +1021,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Lab number 1..8 or 'all' (default: all).",
     )
     parser.add_argument(
+        "--mode",
+        choices=("full", "express"),
+        default="full",
+        help="Verification scope: 'full' (Track B 8h all 15 files, default) or 'express' (Track A 4h core subset).",
+    )
+    parser.add_argument(
         "--verify-starter-stubs",
         action="store_true",
         help="Assert all 8 labs fail on unsolved starter/ stubs AND pass 100% on solution/.",
@@ -784,28 +1066,28 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if ok else 1
 
     labs = _parse_lab_arg(args.lab)
-    report = run_labs(args.track, labs)
+    report = run_labs(args.track, labs, mode=args.mode)
 
     if args.json:
         print(json.dumps(report, indent=2))
     else:
         print("==============================================================================")
-        print(f"Workshop Lab Verifier — track={args.track} | lab={args.lab}")
+        print(f"Workshop Lab Verifier — track={args.track} | lab={args.lab} | mode={args.mode}")
         print("==============================================================================")
         for r in report["results"]:
             badge = "[PASS]" if r["passed"] else "[FAIL]"
-            print(f"{badge} Lab {r['lab']} ({args.track}/)")
+            print(f"{badge} Lab {r['lab']} ({args.track}/, mode={args.mode})")
             for note in r["notes"]:
                 print(f"    + {note}")
             for fail in r["failures"]:
                 print(f"    x {fail}")
         print("------------------------------------------------------------------------------")
         if report["all_passed"]:
-            print(f"[OK] Verified {len(labs)}/{len(labs)} lab(s) on track={args.track}.")
+            print(f"[OK] Verified {len(labs)}/{len(labs)} lab(s) on track={args.track} (mode={args.mode}).")
         else:
             failed_ids = [r["lab"] for r in report["results"] if not r["passed"]]
             print(
-                f"[FAIL] Lab(s) {failed_ids} did not pass on track={args.track}. "
+                f"[FAIL] Lab(s) {failed_ids} did not pass on track={args.track} (mode={args.mode}). "
                 "Complete remaining TODO(Lab N) items and re-run.",
                 file=sys.stderr,
             )

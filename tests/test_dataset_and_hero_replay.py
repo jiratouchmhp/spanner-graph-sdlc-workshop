@@ -806,6 +806,109 @@ class TestDatasetAndHeroReplay(unittest.TestCase):
         )
         self.assertEqual(len(fake_hero_db.snapshots[0].sql_calls), 3)
 
+    def test_provision_script_spanner_description_length_and_drop_protection_flags(self) -> None:
+        """provision_workshop_env.sh keeps --description within 4-30 chars and updates drop protection on databases."""
+        import shlex
+
+        cases = [
+            (["create", "--project", "demo-proj", "--region", "asia-southeast3", "--dry-run"], 1),
+            (["create", "--project", "demo-proj", "--region", "northamerica-northeast1", "--dry-run"], 1),
+            (
+                [
+                    "backup-to-singapore",
+                    "--project",
+                    "demo-proj",
+                    "--region",
+                    "asia-southeast3",
+                    "--secondary-region",
+                    "asia-southeast1",
+                    "--dry-run",
+                ],
+                1,
+            ),
+            (
+                [
+                    "backup-to-singapore",
+                    "--project",
+                    "demo-proj",
+                    "--region",
+                    "asia-southeast3",
+                    "--secondary-region",
+                    "northamerica-northeast2",
+                    "--dry-run",
+                ],
+                1,
+            ),
+        ]
+        for args, expected_create_lines in cases:
+            with self.subTest(args=args):
+                proc = subprocess.run(
+                    ["bash", "scripts/provision_workshop_env.sh", *args],
+                    cwd=str(REPO_ROOT),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+                create_lines = [
+                    line
+                    for line in proc.stdout.splitlines()
+                    if "[DRY-RUN]" in line and "spanner instances create" in line
+                ]
+                self.assertEqual(len(create_lines), expected_create_lines, proc.stdout)
+                for line in create_lines:
+                    tokens = shlex.split(line)
+                    desc_tokens = [t for t in tokens if t.startswith("--description=")]
+                    self.assertEqual(len(desc_tokens), 1, line)
+                    desc_val = desc_tokens[0].split("=", 1)[1]
+                    self.assertGreaterEqual(
+                        len(desc_val), 4, f"--description too short: {desc_val!r}"
+                    )
+                    self.assertLessEqual(
+                        len(desc_val),
+                        30,
+                        f"--description exceeds 30-char Cloud Spanner API limit: {desc_val!r} ({len(desc_val)} chars)",
+                    )
+
+        # Verify cleanup disables drop protection via `databases update` (NOT `instances update`)
+        cleanup_proc = subprocess.run(
+            ["bash", "scripts/provision_workshop_env.sh", "cleanup", "--project", "demo-proj", "--dry-run"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(cleanup_proc.returncode, 0, cleanup_proc.stderr or cleanup_proc.stdout)
+        self.assertIn("spanner databases update", cleanup_proc.stdout)
+        self.assertIn("--no-enable-drop-protection", cleanup_proc.stdout)
+        self.assertNotIn("spanner instances update", cleanup_proc.stdout)
+
+    def test_dynamic_graph_loader_sets_unprefixed_domain_key(self) -> None:
+        """neo4j_to_spanner_loader._prepare_dynamic_graph_records sets domain_key == node_id (no label prefix)."""
+        loader_mod = self._load_module_from_path(
+            "neo4j_loader_dyn_key_test",
+            REPO_ROOT / "solution" / "pipelines" / "neo4j_to_spanner_loader.py",
+        )
+        node_rows, edge_rows = loader_mod._prepare_dynamic_graph_records(STRUCTURED_DIR)
+        self.assertEqual(len(node_rows), 68)
+        self.assertEqual(len(edge_rows), 234)
+
+        by_id: dict[str, tuple[str, str, str]] = {}
+        for node_id, node_label, domain_key, _props_json in node_rows:
+            self.assertEqual(
+                domain_key,
+                node_id,
+                f"GraphNode.domain_key must equal raw node_id (no label prefix): got {domain_key!r} for {node_id!r}",
+            )
+            self.assertNotIn(":", domain_key)
+            self.assertEqual(node_label, node_label.lower())
+            by_id[node_id] = (node_id, node_label, domain_key)
+
+        # Hero API api-payments-charge-v2 must match @api_id directly in SdlcDynamicGraph Hero Query C
+        self.assertIn("api-payments-charge-v2", by_id)
+        self.assertEqual(by_id["api-payments-charge-v2"][1], "api")
+        self.assertEqual(by_id["api-payments-charge-v2"][2], "api-payments-charge-v2")
+
 
 if __name__ == "__main__":
     unittest.main()

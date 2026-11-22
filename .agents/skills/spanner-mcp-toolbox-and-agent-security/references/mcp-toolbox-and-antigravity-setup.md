@@ -46,7 +46,16 @@ Open **Agent Panel > Menu > MCP Servers > Manage MCP Servers > View raw config**
     },
     "spanner-curated-local": {
       "command": "npx",
-      "args": ["-y", "@toolbox-sdk/server", "--config", "/abs/path/to/tools.yaml", "--stdio"],
+      "args": [
+        "-y",
+        "@toolbox-sdk/server",
+        "--config",
+        "/abs/path/to/tools.yaml",
+        "--stdio",
+        "--allowed-hosts=localhost,127.0.0.1",
+        "--allowed-origins=http://localhost:5000,http://127.0.0.1:5000",
+        "--disable-version-check"
+      ],
       "env": {
         "SPANNER_PROJECT": "{project_id}",
         "SPANNER_INSTANCE": "{instance_id}",
@@ -223,7 +232,7 @@ gcloud run deploy toolbox-ro-persona \
   --no-allow-unauthenticated \
   --set-env-vars="SPANNER_PROJECT=${PROJECT_ID},SPANNER_INSTANCE={instance_id},SPANNER_DATABASE={database_id},GOOGLE_CLOUD_PROJECT=${PROJECT_ID},VERTEX_AI_LOCATION=${VERTEX_REGION}" \
   --set-secrets="/app/tools.yaml=tools-ro-persona:latest" \
-  --args="--config=/app/tools.yaml","--address=0.0.0.0","--port=8080"
+  --args="--config=/app/tools.yaml","--address=0.0.0.0","--port=8080","--allowed-hosts=localhost","--allowed-origins=http://localhost","--disable-reload","--disable-version-check"
 
 # 5. Lock down DNS rebinding, CORS, structured logging, GCP telemetry & SQLCommenter
 export TOOLBOX_URL="$(gcloud run services describe toolbox-ro-persona --region="$REGION" --format='value(status.url)')"
@@ -236,7 +245,7 @@ gcloud run deploy toolbox-ro-persona \
   --no-allow-unauthenticated \
   --set-env-vars="SPANNER_PROJECT=${PROJECT_ID},SPANNER_INSTANCE={instance_id},SPANNER_DATABASE={database_id},GOOGLE_CLOUD_PROJECT=${PROJECT_ID},VERTEX_AI_LOCATION=${VERTEX_REGION},TOOLBOX_URL=${TOOLBOX_URL}" \
   --set-secrets="/app/tools.yaml=tools-ro-persona:latest" \
-  --args="--config=/app/tools.yaml","--address=0.0.0.0","--port=8080","--allowed-origins=${TOOLBOX_URL}","--allowed-hosts=${TOOLBOX_HOST}","--logging-format=JSON","--telemetry-gcp","--sql-commenter","--disable-reload"
+  --args="--config=/app/tools.yaml","--address=0.0.0.0","--port=8080","--allowed-origins=${TOOLBOX_URL}","--allowed-hosts=${TOOLBOX_HOST}","--logging-format=JSON","--telemetry-gcp","--sql-commenter","--disable-reload","--disable-version-check"
 
 # 6. Restrict Cloud Run invocation to the specific caller agent SA
 gcloud run services add-iam-policy-binding toolbox-ro-persona \
@@ -249,9 +258,11 @@ gcloud run services add-iam-policy-binding toolbox-ro-persona \
 1. **Port Mismatch:** Toolbox defaults to `127.0.0.1:5000`; Cloud Run routes to `$PORT=8080` and fails startup unless `--address=0.0.0.0 --port=8080` are passed.
 2. **IAP Unsupported:** MCP Toolbox does **not** support Cloud Run services behind Identity-Aware Proxy (IAP)—disable IAP on the service.
 3. **Dual-Auth Header Conflict:** When Cloud Run enforces IAM (`roles/run.invoker`) **and** Toolbox enforces MCP OAuth (`mcpEnabled: true` on `Authorization: Bearer`), send the Cloud Run IAM identity token in **`X-Serverless-Authorization`** so both layers validate cleanly.
-4. **DNS Rebinding ("Local Fallacy"):** Never leave `--allowed-hosts="*"` (the default!), even on `127.0.0.1`—a malicious browser tab can DNS-rebind to local Toolbox. Always set `--allowed-hosts="localhost,127.0.0.1"` locally or the exact FQDN in Cloud Run, and restrict `--allowed-origins`.
-5. **TLS & Config Flags:** Direct self-hosted HTTP requires `--tls-cert` and `--tls-key` (enforces TLS 1.2+). `--config`, `--configs` (comma-separated merge), and `--config-folder` are **mutually exclusive**. Use `--poll-interval=<sec>` on network mounts where inotify drops, or `--disable-reload` in immutable production containers. `--http-max-request-bytes` defaults to `10485760` (10 MiB).
+4. **DNS Rebinding ("Local Fallacy") & `--stdio` Wildcard Warnings (`v1.13.1`):** Never leave `--allowed-hosts="*"` or `--allowed-origins="*"` (the defaults!), even on `127.0.0.1` or `--stdio`—a malicious browser tab can DNS-rebind to local Toolbox, and `v1.13.1` logs wildcard `WARN`s for both flags even in `--stdio` mode unless explicitly restricted. Always set `--allowed-hosts="localhost,127.0.0.1"` and `--allowed-origins="http://localhost:5000,http://127.0.0.1:5000"` locally, or the exact FQDN/URL in Cloud Run.
+5. **TLS, Config & Version-Check Flags (`v1.13.1`):** Direct self-hosted HTTP requires `--tls-cert` and `--tls-key` (enforces TLS 1.2+). Always use `--config` (legacy `--tools-file` is **deprecated** in `v1.13.1` and prints a warning); `--config`, `--configs` (comma-separated merge), and `--config-folder` are **mutually exclusive**. Use `--poll-interval=<sec>` on network mounts where inotify drops, `--disable-reload` in immutable production containers, and `--disable-version-check` to disable outbound GitHub release checks on startup. `--http-max-request-bytes` defaults to `10485760` (10 MiB).
 6. **Observability:** `--sql-commenter` prepends `traceparent`, `server`, `tool.name`, `db.system.name`, and `_meta["dev.mcp-toolbox/telemetry"]` to SQL statements; `--telemetry-gcp` exports to Cloud Monitoring; `--telemetry-otlp` exports OTLP.
+7. **Legacy `/api/*` Removal (`HTTP 410 Gone` in `v1.13.1+`):** MCP Toolbox `v1.13.1+` disables legacy `/api/toolset` and `/api/tool/{name}/invoke` routes by default (returning `HTTP 410 Gone`). Always call standard Streamable HTTP JSON-RPC 2.0 endpoints at **`POST /mcp`** (all tools) or **`POST /mcp/{toolset}`** (`initialize`, `tools/list`, `tools/call`).
+8. **IAM Propagation & Teardown CLI Gotchas:** Newly created IAM Service Accounts require a **3–8s propagation retry loop** (backoff on `Service account ... does not exist`) before `gcloud spanner databases add-iam-policy-binding` succeeds consistently. For idempotent cleanup scripts, note that `gcloud run services delete` prints **`could not be found`** (not `NOT_FOUND`) on 404.
 
 ---
 
@@ -310,6 +321,7 @@ spanner_toolset = SpannerToolset(
 
 ## 7. Setup Anti-Patterns & Public References
 
+- **NEVER** pass deprecated `--tools-file` on `v1.13.1+` (use `--config`), and **NEVER** call legacy `/api/toolset` or `/api/tool/{name}/invoke` routes (`HTTP 410 Gone` in `v1.13.1+` — use `/mcp` or `/mcp/{toolset}` JSON-RPC 2.0).
 - **NEVER** deploy `--allow-unauthenticated` on Cloud Run MCP Toolbox.
 - **NEVER** leave `--allowed-hosts="*"` or `--allowed-origins="*"` in shared or local browser-adjacent deployments.
 - **NEVER** use API keys against `https://spanner.googleapis.com/mcp` or `https://databaseinsights.googleapis.com/mcp` (OAuth 2.0 + IAM only).

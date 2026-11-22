@@ -51,11 +51,11 @@ Solve hands-on lab exercises **exclusively inside `starter/`**; leave `data/`, `
 | :--- | :--- |
 | `starter/` | **Participant Workspace**: `starter/README.md` + `15` `TODO(Lab 1–8)` stubs across `starter/sql/` (`10` files), `starter/pipelines/` (`2` loaders), `starter/mcp/` (`tools.yaml`, `adk_multi_agent_demo.py`), and `starter/tools/customer_scale_worksheet.json`. |
 | `solution/` | **Verified Reference Implementation**: `solution/sql/` (`01`–`11`, `03a`–`03d`, `04b`, `fixtures/`), `solution/pipelines/` (`5` ingestion & offline Hero replay scripts), `solution/mcp/` (`tools.yaml`, `3` rendered `personas/*.yaml`, IAM/Model Armor script, ADK demo), `solution/tools/sizing_calculator.py`. |
-| `data/` | **Locked Shared Corpus**: `data/structured/` (Neo4j CE Docker/APOC scripts, `5` node CSVs, `10` edge CSVs, JSONLs) and `data/unstructured/` (`45` Markdown SDLC docs). |
+| `data/` | **Locked Shared Corpus**: `data/structured/` (Zero-Docker simulator `no_docker_neo4j_sim.py`, optional Neo4j CE Docker/APOC scripts, `5` node CSVs, `10` edge CSVs, JSONLs) and `data/unstructured/` (`45` Markdown SDLC docs). |
 | `docs/` | Facilitator guide (`docs/00_facilitator_guide.md`) and Module 1–8 lab guides (`docs/01_*.md`–`docs/08_*.md`). |
 | `labs/` | Parameterized live/dry-run Hero Query runner (`labs/run_hero_query.py`). |
-| `scripts/` | GCP & local verification helpers (`provision_workshop_env.sh`, `setup_antigravity_skills.sh`, `verify_live_gcp.sh`, `verify_lab.py`). |
-| `tests/` | `7` stdlib `unittest` modules (`tests/test_*.py`) covering invariants, dataset parity, MCP RBAC, sizing, skills, starter stubs, and docs consistency. |
+| `scripts/` | GCP & local verification helpers (`preflight_check.sh`, `provision_workshop_env.sh`, `run_live_sql.py`, `setup_antigravity_skills.sh`, `verify_lab.py`, `verify_live_gcp.sh`, `verify_zero_residual.sh`). |
+| `tests/` | `8` stdlib `unittest` modules (`tests/test_*.py`) covering invariants, dataset parity, MCP RBAC, sizing, skills, starter stubs, docs consistency, and Zero-Docker/ops scripts. |
 | `.antigravity/` | Antigravity MCP configuration (`.antigravity/mcp_config.json`, `.antigravity/README.md`). |
 | `.agents/` | Always-on workspace rule (`.agents/rules/spanner-graph-workshop.md`) and `8` modular skills (`.agents/skills/*`). |
 
@@ -72,22 +72,27 @@ Solve hands-on lab exercises **exclusively inside `starter/`**; leave `data/`, `
 | **7** | Bangkok/Singapore Enterprise Sizing & 3-Store TCO | `starter/tools/customer_scale_worksheet.json` |
 | **8** | Observability, Studio Viz, Pre-Splitting & Teardown | `starter/sql/11_observability_and_studio_viz.sql` |
 
-## Standard Verification & Lifecycle Commands (`Makefile`)
+## Standard Verification & Lifecycle Commands (All 16 `Makefile` Targets)
 
-Always confirm active GCP project/region and obtain explicit user approval before running `make provision-gcp`, `make cleanup-gcp`, or any live Cloud Spanner write.
+Always confirm active GCP project/region and obtain explicit user approval before running `make provision-gcp`, `make verify-live`, `make cleanup-gcp`, `make cleanup-all-gcp`, or any live Cloud Spanner write.
 
 ```bash
-make help                                       # List all available Makefile targets
-make install                                    # Install Python dependencies
-make test                                       # Run all 7 offline unittest modules
-make validate-skills                            # Audit all 8 Antigravity skills, frontmatter & links
-make verify-starter-stubs                       # Confirm all 15 starter stubs fail until completed
-make TRACK=starter verify-lab LAB=1             # Check starter/ Lab 1..8 progress (default: TRACK=solution LAB=all)
-make sizing PRESET=all REGION=asia-southeast3   # Run verified 2026 Bangkok/Singapore sizing & 3-store TCO
-make dry-run-pipelines                          # Stdlib dry-run for Path A & Path B ingestion loaders
-make demo-mcp-mock                              # Offline persona RBAC & prompt-injection fail-closed demo
-make provision-gcp                              # [CONFIRM FIRST] Provision Bangkok 100-PU Enterprise sandbox
-make cleanup-gcp                                # [CONFIRM FIRST] Delete sandbox instance & Singapore backup copies
+make help                                             # List all 16 Makefile targets & variables
+make preflight                                        # Fast 5-second attendee readiness check (STRICT_GCP=1 for live)
+make lab1-no-docker                                   # Zero-Docker Lab 1 Neo4j CE & APOC simulator + parity check
+make install                                          # Create PEP-668-safe .venv & install core pipeline SDKs
+make install-mcp                                      # Optional Lab 6 live ADK/MCP & Model Armor packages
+make test                                             # Run all 8 offline stdlib unittest modules
+make validate-skills                                  # Audit all 8 Antigravity skills, frontmatter & links
+make verify-starter-stubs                             # Confirm all 15 starter stubs fail until completed
+make TRACK=starter verify-lab LAB=1                   # Check starter/ Lab 1..8 progress (MODE=express for 4h Track A)
+make sizing PRESET=all REGION=asia-southeast3         # Run verified 2026 Bangkok/Singapore sizing & 3-store TCO
+make dry-run-pipelines                                # Stdlib dry-run for Path A & Path B ingestion loaders
+make demo-mcp-mock                                    # Offline persona RBAC & prompt-injection fail-closed demo
+make provision-gcp                                    # [CONFIRM FIRST] Provision Bangkok 100-PU Enterprise sandbox
+make verify-live                                      # [CONFIRM FIRST] Run 5-check live Cloud Spanner verification
+make cleanup-gcp                                      # [CONFIRM FIRST] Delete sandbox instance & Singapore backup copies
+make cleanup-all-gcp                                  # [CONFIRM FIRST] Full teardown (MCP/IAM/DLP/GCS/Spanner) + zero-residual audit
 ```
 
 ## Antigravity Skill Routing Table (`.agents/skills/`)

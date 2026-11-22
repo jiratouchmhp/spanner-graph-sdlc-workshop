@@ -23,7 +23,7 @@ All 7 benchmarks in `05_search_strategies_benchmark.sql` plus the 3 Data Boost a
 | **3** | **Full-Text Search (FTS)** | `SEARCH(content_tokens, @q, dictionary => 'SdlcSynonymDict', enhance_query => TRUE)` + `SCORE` + `SNIPPET` | Exact lexical + domain synonym expansion (`pan` → `tok_pci_v2`, `freeze` → `180-day`) | **Read-Only txn mandatory (`INV-09`)**; bounded staleness `>= 10s` recommended | Finding exact identifiers (`ADR-004`, `tok_pci_v2`, `45ms`, `Idempotency-Key`) |
 | **4** | **Fuzzy N-Gram Search** | `SEARCH_NGRAMS(content_ngrams, @typo, min_ngrams => 2)` + `SCORE_NGRAMS` | Typo-tolerant trigram matching (`paymnts chrge idempoten`) | **Read-Only txn**; always wrap inner scan with `LIMIT 10000` cap | Interactive developer search bars tolerating typos |
 | **5** | **JSON + Numeric + `LIKE`** | `TOKENIZE_JSON` + `TOKENIZE_NUMBER` + `TOKENIZE_NGRAMS(LOWER(http_path))` | Single local zig-zag intersection on `IdxApisSearch` | **Read-Only txn**; literal `LIKE` pattern `>= 3` chars | Governance queries: *"PCI-scoped APIs in `asia-southeast3` with latency `<= 250ms` matching `%payments%`"* |
-| **6** | **Exact KNN Vector** | `COSINE_DISTANCE(embedding, @query_vec)` with `@{scan_method=batch}` | **100% exact recall**; O(N) over filtered slice | `WHERE embedding IS NOT NULL` + literal `LIMIT k` | Selective slices or corpora up to tens of thousands of vectors |
+| **6** | **Exact KNN Vector** | `COSINE_DISTANCE(embedding, @query_vec)` with `@{scan_method=batch}` (standalone only!) | **100% exact recall**; O(N) over filtered slice | `WHERE embedding IS NOT NULL` + literal `LIMIT k`; **omit `@{scan_method=batch}` on CTEs joined downstream** (unsupported on right side of apply/merge/hash joins) | Selective slices or corpora up to tens of thousands of vectors |
 | **7** | **ScaNN ANN Vector** | `APPROX_COSINE_DISTANCE(embedding, @query_vec, options => JSON '{"num_leaves_to_search": 10}')` | Sub-linear millisecond ANN over millions of chunks | **`INV-08`:** `WHERE embedding IS NOT NULL`, single-table CTE (zero `JOIN` inside ANN block), never on edges | Production-scale semantic GraphRAG retrieval (`>= 100k`–`100M+` vectors) |
 | **8** | **Data Boost Graph Algorithms** | `EXPORT DATA ... CALL PER () PageRank` / `WeaklyConnectedComponents` / `ShortestPath` | Serverless isolated compute (`$1.2285/1k SPU-hr` Bangkok) — **zero OLTP CPU impact** | **Literals only (no `@param`)**; table-backed interleaved graph + `NOT ENFORCED` FK; `max_idle_time => '5m'` | Nightly architectural criticality scoring (`svc-auth` #1 hub) & topology health |
 
@@ -64,6 +64,7 @@ When connected to your Bangkok instance, inspect execution plans with `--query-m
 - **`SeekableKeySize`** matches index leading key columns on `IdxApiCalledByService` and `IdxServiceDependedOnBy`.
 - **Search Index Scan** appears on `IdxDocumentChunksSearch` and `IdxApisSearch` (zero full-table scan).
 - **Vector Index Scan** appears on `IdxDocumentChunksEmbedding` for Benchmark 7.
+- **Live-Verified Optimizer & Latency Notes (Bangkok `100` PU):** All Lab 4/5 SQL, FTS, Vector, and Hero GraphRAG queries run in **33–520 ms**. Whenever an FTS `SCORE()` CTE is referenced multiple times (such as Lab 5 Query 2 RSF `fts_raw` + `fts_bounds` or MCP Toolbox hybrid tools), prefix the query with **`@{optimizer_version=latest}`** (optimizer `>= 6`).
 
 ---
 
@@ -75,7 +76,10 @@ Notice how `08_graph_algorithms_criticality.sql` solves two critical constraints
 1. **Satisfying Algorithm Interleaving Without Violating `INV-06`:** Graph Algorithms require edge tables to be `INTERLEAVE IN PARENT <SourceNode>` **and** declare a foreign key to `<DestNode>`. Because `Services -> Services` is self-referential, `ServiceDependsOnAlgo` uses `INTERLEAVE IN PARENT Services ON DELETE CASCADE` plus `FOREIGN KEY (to_service_id) REFERENCES Services (service_id) NOT ENFORCED`!
 2. **Dynamic Subgraph Filtering (`CALL PER () PageRank`):** We exclude non-blocking `DATA_FEED` edges (`WHERE e.dependency_type <> 'DATA_FEED'`) inside a `FULL UNION ALL ... NEXT CALL PER () PageRank(...)` block and write results directly back into `ServiceAlgoProperty` via `EXPORT DATA OPTIONS (format = 'CLOUD_SPANNER', table = 'ServiceAlgoProperty', write_mode = 'upsert_ignore_all')`. Expected #1 hub: **`svc-auth`** (`in-degree = 10`).
 
-> **Cost Hygiene:** Always pass `max_idle_time => '5m'` (default is `30m`) to avoid warm idle Data Boost SPU billing between workshop runs, and monitor execution progress in `SPANNER_SYS.GRAPH_OPERATION_EXECUTION_STATUS`.
+> **Live-Verified IAM, Syntax & Cost Hygiene (`~3 min` for all 3 algorithms):**
+> - **Caller IAM:** Bind **`roles/spanner.graphIntelligenceUser`** on the caller — **even `roles/owner` does NOT include `spanner.databases.useDataBoost`**!
+> - **Spanner Write-Back IAM (`format = 'CLOUD_SPANNER'`):** Grant database-level **`roles/spanner.databaseUser` + `roles/spanner.graphIntelligenceUser`** to `service-<PROJECT_NUMBER>@gcp-sa-spanner.iam.gserviceaccount.com` so Data Boost can write results into `ServiceAlgoProperty`.
+> - **`ShortestPath`, Idempotency & Cost:** Declare setup tables with `CREATE TABLE IF NOT EXISTS`, return **every** yielded node in `ShortestPath` (`source_node.service_id` AND `target_node.service_id`), use `fallback_compute_region => '<region>'` (if setting a same-jurisdiction fallback), keep `max_idle_time => '5m'` (default `30m` bills while idle), and monitor via `SPANNER_SYS.GRAPH_OPERATION_EXECUTION_STATUS`.
 
 ---
 
@@ -99,7 +103,11 @@ Complete the `TODO(Lab 4)` blocks in both starter SQL files:
 ### Verify Lab 4 Offline
 
 ```bash
+# Track B (Full: 05 Search Benchmarks + 08 Data Boost Graph Algorithms)
 make TRACK=starter verify-lab LAB=4
+
+# Track A (4-Hour Express: 05 Search Benchmarks only)
+make TRACK=starter MODE=express verify-lab LAB=4
 ```
 
 **Checkpoint Expected Output:** `[PASS] Lab 4 (starter/)` — all 7 search benchmarks and Data Boost Graph Algorithms verified!

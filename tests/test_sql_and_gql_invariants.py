@@ -223,7 +223,11 @@ def normalize_sql_type(type_expr: str) -> str:
 
 def parse_create_table(stmt: str) -> dict[str, Any] | None:
     """Parse a GoogleSQL CREATE TABLE statement into columns, PK, FKs, interleaving."""
-    m = re.match(r"CREATE\s+TABLE\s+([A-Za-z_]\w*)\s*\(", stmt, re.IGNORECASE)
+    m = re.match(
+        r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_]\w*)\s*\(",
+        stmt,
+        re.IGNORECASE,
+    )
     if not m:
         return None
     table_name = m.group(1)
@@ -998,6 +1002,116 @@ class TestSqlAndGqlInvariants(unittest.TestCase):
         self.assertRegex(obs, r"SPANNER_SYS\.LOCK_STATS_TOP_HOUR")
         self.assertRegex(obs, r"(?is)DISTRIBUTION_PERCENTILE\s*\(.*?\)\s*/\s*1000000")
         self.assertRegex(obs, r"SPANNER_SYS\.USER_SPLIT_POINTS")
+
+    def test_live_bangkok_gcp_sql_and_gql_regressions(self) -> None:
+        """Regression suite for all live Bangkok/Singapore Cloud Spanner Enterprise SQL/GQL findings."""
+        starter_sql_dir = REPO_ROOT / "starter" / "sql"
+
+        # 1. TOKENIZE_JSON(metadata) generated TOKENLIST column MUST be virtual HIDDEN (never STORED)
+        for label, path in (
+            ("solution/sql/01_path_a_schematized.sql", SQL_DIR / "01_path_a_schematized.sql"),
+            ("starter/sql/01_path_a_schematized.sql", starter_sql_dir / "01_path_a_schematized.sql"),
+        ):
+            clean = strip_sql_comments(path.read_text(encoding="utf-8"))
+            m = re.search(
+                r"metadata_tokens\s+TOKENLIST\s+AS\s*\(\s*TOKENIZE_JSON\s*\(\s*metadata\s*\)\s*\)([^,\n;]*)",
+                clean,
+                re.IGNORECASE | re.DOTALL,
+            )
+            self.assertIsNotNone(m, f"{label} missing metadata_tokens TOKENIZE_JSON(metadata) column")
+            modifiers = m.group(1).upper()
+            self.assertIn("HIDDEN", modifiers, f"{label} metadata_tokens must be HIDDEN")
+            self.assertNotIn(
+                "STORED",
+                modifiers,
+                f"{label} metadata_tokens TOKENIZE_JSON(metadata) must NOT be STORED",
+            )
+
+        # 2. 03a_seed_synonyms_and_metadata.sql: zero multi-line single-quoted JSON '{ literals; use JSON '''{
+        seed_raw = (SQL_DIR / "03a_seed_synonyms_and_metadata.sql").read_text(encoding="utf-8")
+        seed_clean = strip_sql_comments(seed_raw)
+        self.assertIsNone(
+            re.search(r"\bJSON\s+'(?!'')\{[^\n']*\n", seed_clean, re.IGNORECASE),
+            "03a_seed_synonyms_and_metadata.sql must not use multi-line single-quoted JSON '{ literals",
+        )
+        triple_json_matches = re.findall(r"\bJSON\s+'''\{", seed_clean, re.IGNORECASE)
+        self.assertGreaterEqual(
+            len(triple_json_matches),
+            7,
+            "03a_seed_synonyms_and_metadata.sql must wrap multi-line JSON literals in triple quotes (JSON '''{ ... }''')",
+        )
+
+        # 3. 06_hybrid_rrf_rsf_filtered.sql (solution & starter): Query 2 (RSF) uses @{optimizer_version=latest}
+        for label, path in (
+            ("solution/sql/06_hybrid_rrf_rsf_filtered.sql", SQL_DIR / "06_hybrid_rrf_rsf_filtered.sql"),
+            ("starter/sql/06_hybrid_rrf_rsf_filtered.sql", starter_sql_dir / "06_hybrid_rrf_rsf_filtered.sql"),
+        ):
+            stmts = split_statements(strip_sql_comments(path.read_text(encoding="utf-8")))
+            rsf_stmts = [s for s in stmts if "rsf_score" in s.lower() and "fts_bounds" in s.lower()]
+            self.assertEqual(len(rsf_stmts), 1, f"{label} must contain Query 2 RSF statement")
+            self.assertRegex(
+                rsf_stmts[0],
+                r"@\{\s*optimizer_version\s*=\s*latest\s*\}",
+                f"{label} Query 2 (RSF) must include @{{optimizer_version=latest}} for multi-referenced SCORE() CTE",
+            )
+
+        # 4. 07_hero_api_blast_radius_graphrag.sql Query A: no @{scan_method=batch} on joined CTE vec_top
+        hero_stmts = self.stmts_by_name["07_hero_api_blast_radius_graphrag.sql"]
+        query_a_stmts = [
+            s for s in hero_stmts if "COSINE_DISTANCE(" in s.upper() and "APPROX_COSINE_DISTANCE(" not in s.upper()
+        ]
+        self.assertEqual(len(query_a_stmts), 1, "Expected exactly 1 Exact KNN Hero Query A statement")
+        vec_top_match = re.search(
+            r"\bvec_top\s+AS\s*\((.*?)\)\s*,",
+            query_a_stmts[0],
+            re.IGNORECASE | re.DOTALL,
+        )
+        self.assertIsNotNone(vec_top_match, "Hero Query A missing vec_top CTE")
+        self.assertNotIn(
+            "scan_method=batch",
+            vec_top_match.group(1).lower().replace(" ", ""),
+            "Hero Query A vec_top CTE must NOT use @{scan_method=batch} (unsupported on joined CTEs)",
+        )
+
+        # 5. 08_graph_algorithms_criticality.sql: CREATE TABLE IF NOT EXISTS, target_service_id & ShortestPath target_node
+        algo_clean = self.clean_by_name["08_graph_algorithms_criticality.sql"]
+        self.assertRegex(algo_clean, r"(?i)\bCREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+ServiceDependsOnAlgo\b")
+        self.assertRegex(algo_clean, r"(?i)\bCREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+ServiceAlgoProperty\b")
+        self.assertRegex(algo_clean, r"(?i)\btarget_service_id\s+STRING\s*\(\s*64\s*\)")
+
+        starter_algo_clean = strip_sql_comments(
+            (starter_sql_dir / "08_graph_algorithms_criticality.sql").read_text(encoding="utf-8")
+        )
+        self.assertRegex(starter_algo_clean, r"(?i)\bCREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+ServiceAlgoProperty\b")
+        self.assertRegex(starter_algo_clean, r"(?i)\btarget_service_id\s+STRING\s*\(\s*64\s*\)")
+
+        sp_stmts = [
+            s
+            for s in self.stmts_by_name["08_graph_algorithms_criticality.sql"]
+            if "CALL ShortestPath(" in s
+        ]
+        self.assertEqual(len(sp_stmts), 1, "Expected 1 ShortestPath EXPORT DATA statement in 08")
+        self.assertRegex(sp_stmts[0], r"(?i)\bsource_node\.service_id\s+AS\s+service_id\b")
+        self.assertRegex(sp_stmts[0], r"(?i)\btarget_node\.service_id\s+AS\s+target_service_id\b")
+
+        # 6. 09_opencypher_to_gql_cookbook.sql Translation 8: explicit AS cnt alias in VALUE { ... }
+        cookbook_clean = self.clean_by_name["09_opencypher_to_gql_cookbook.sql"]
+        val_blocks = re.findall(r"\bVALUE\s*\{([^}]*)\}", cookbook_clean, re.IGNORECASE | re.DOTALL)
+        self.assertGreaterEqual(len(val_blocks), 1, "Expected VALUE { ... } subquery in 09 cookbook")
+        for vb in val_blocks:
+            self.assertRegex(
+                vb,
+                r"(?i)\bRETURN\s+COUNT\s*\(\s*\*\s*\)\s+AS\s+cnt\b",
+                f"VALUE {{ ... }} subquery in 09_opencypher_to_gql_cookbook.sql must alias COUNT(*) AS cnt: {vb!r}",
+            )
+
+        # 7. 03d_backfill_embeddings_pdml.sql: explicit STRUCT(768 AS outputDimensionality)
+        pdml_clean = self.clean_by_name["03d_backfill_embeddings_pdml.sql"]
+        self.assertRegex(
+            pdml_clean,
+            r"(?i)STRUCT\s*\(\s*768\s+AS\s+outputDimensionality\s*\)",
+            "03d_backfill_embeddings_pdml.sql must pass STRUCT(768 AS outputDimensionality) to ML.PREDICT",
+        )
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ Production reference for Cloud Spanner secondary indexes (global, interleaved, c
 | :--- | :--- | :--- |
 | **Physical Layout** | Colocated inside the parent row's split (row tree) | Stored as an independent root table split separately from the base table |
 | **Key Prefix Requirement** | Parent PK must be a leading prefix of index keys matching **type, sort order, and nullability** (**column names do NOT need to match**) | None |
-| **Allowed Parent** | Ancestor of base table (**preferred**) **OR a non-ancestor table** (e.g., indexing `OrderItems(SupplierId, ...)` interleaved in `Suppliers`) | N/A |
+| **Allowed Parent** | Ancestor of base table (**preferred**) **OR a non-ancestor table** (verified live on Enterprise: e.g., covering reverse index on `OrderItems(SupplierId, ...)` or an edge table `INTERLEAVE IN Suppliers` / `INTERLEAVE IN TargetTable`) | N/A |
 | **Write Overhead** | **Low** when interleaved in an ancestor (single-split local write, avoids 2PC); **higher** when interleaved in a non-ancestor (2PC) | **Higher** (separate split from base table -> distributed 2PC) |
 | **Primary Use Case** | Single-entity scoped queries (`WHERE CustomerId = @id AND ...`); **Schema Design Best Practice #3** to avoid hotspots on monotonic indexed columns | Cross-database lookups (`WHERE Email = @email`) |
 
@@ -235,7 +235,7 @@ CREATE INDEX idx_adult_users ON users(adult_age) WHERE adult_age IS NOT NULL;
 - **Generated Primary Keys & Optimizer Inference:** Generated PKs must be **`STORED`** (ideal for `ShardId` or JSON PK extraction: `DocId INT64 NOT NULL AS (INT64(Payload.id)) STORED` / PG `((payload ->> 'id')::BIGINT) STORED NOT NULL`). When a generated PK depends on **a single column** constrained by `=`, `IN (...)`, or an equi-join, Spanner automatically infers the generated PK predicate (e.g., `WHERE UserId = @u` rewrites to `WHERE ShardId = MOD(@u, 64) AND UserId = @u`).
 - **Exhaustive Restrictions:**
   1. Scalar, **immutable functions only**, same table only, no subqueries, no direct writes.
-  2. **Virtual (non-stored) columns:** `STRING`/`BYTES` (GoogleSQL) and `VARCHAR` (PG) **must be length `MAX`** and **cannot be `NOT NULL`**.
+  2. **Virtual (non-stored) columns:** `STRING`/`BYTES` (GoogleSQL) and `VARCHAR` (PG) **must be length `MAX`** and **cannot be `NOT NULL`**. **CRITICAL `TOKENIZE_JSON` Rule:** Generated `TOKENLIST` columns derived from `TOKENIZE_JSON(json_col)` **MUST be virtual `HIDDEN`** (`TOKENLIST AS (TOKENIZE_JSON(metadata)) HIDDEN`) — **NEVER `STORED HIDDEN`** (Cloud Spanner rejects DDL with `JSON derived TOKENLIST column ... may not be STORED`).
   3. **Immutability:** Cannot alter the expression of a `STORED` or indexed generated column (only unindexed virtual columns can be modified); cannot alter the data type of a `STORED`/indexed generated column or any column it references; cannot drop referenced columns.
   4. **`allow_commit_timestamp` forbidden** on generated columns AND on any column they reference.
   5. **Generated PK Extra Rules:** Cannot reference other generated columns; can reference **at most 1 non-key column**; cannot reference a non-key column with a `DEFAULT` clause.

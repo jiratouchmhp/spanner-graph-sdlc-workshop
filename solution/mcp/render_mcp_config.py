@@ -4,7 +4,7 @@
 Generates an Antigravity-compatible `mcp_config.json` (root key `"mcpServers"`)
 pointing to either:
   - `npx -y @toolbox-sdk/server` (zero manual binary download required),
-  - local `./solution/mcp/bin/toolbox --tools-file ... --stdio`,
+  - local `./solution/mcp/bin/toolbox --config ... --stdio`,
   - remote Bangkok (`asia-southeast3`) Cloud Run MCP Toolbox HTTP endpoints,
   - or all modes side-by-side.
 
@@ -71,6 +71,9 @@ def build_mcp_config(
                 "--config",
                 str(tools_file),
                 "--stdio",
+                "--allowed-hosts=localhost,127.0.0.1",
+                "--allowed-origins=http://localhost:5000,http://127.0.0.1:5000",
+                "--disable-version-check",
             ],
             "env": dict(base_env),
         }
@@ -79,9 +82,12 @@ def build_mcp_config(
         servers[f"sdlc-spanner-{persona}-local-bin"] = {
             "command": str(toolbox_bin),
             "args": [
-                "--tools-file",
+                "--config",
                 str(tools_file),
                 "--stdio",
+                "--allowed-hosts=localhost,127.0.0.1",
+                "--allowed-origins=http://localhost:5000,http://127.0.0.1:5000",
+                "--disable-version-check",
             ],
             "env": dict(base_env),
         }

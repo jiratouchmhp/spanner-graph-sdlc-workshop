@@ -130,8 +130,12 @@ LIMIT 5;
   scan optimizations and produces brittle recall across query domains.
 - **Use a SQL literal for fixed `LIMIT`:** Write `LIMIT 10` instead of
   `LIMIT @limit` so the optimizer selects the optimal top-K execution plan.
-- **Batch scan hint:** Apply `@{scan_method=batch}` for scan-heavy KNN queries
-  (already enabled by default for ANN).
+- **Batch scan hint (Standalone Only!):** Apply `@{scan_method=batch}` on
+  **standalone** scan-heavy Exact KNN queries (already enabled by default for
+  ANN). **CRITICAL Join Trap:** `@{scan_method=batch}` is **unsupported on the
+  right side of apply, merge, or hash joins** — omit it inside KNN CTEs that are
+  joined downstream (for example, GraphRAG entity/citation joins) or Spanner
+  rejects the query at plan compilation.
 - **Parallelism & Benchmarking:** Pre-split large KNN tables (`splits add`) or
   allow load-based splitting under sustained load for maximum scan parallelism.
   Repeated identical benchmark queries hit caches — run warm-up reads with

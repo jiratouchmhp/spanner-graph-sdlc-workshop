@@ -92,6 +92,9 @@ Check every generated schema and query against these hard Cloud Spanner rules:
   2. Declare `OUTPUT` for text embeddings as
      `embeddings STRUCT<statistics STRUCT<truncated BOOL, token_count FLOAT64>, values ARRAY<FLOAT32>>`
      and select `embeddings.values` via `FROM ML.PREDICT(MODEL {model}, ...)`.
+     For `gemini-embedding-001`, **always** pass `STRUCT(768 AS outputDimensionality)`
+     (or your column's `vector_length`) as the 3rd `params` argument — omitting it
+     defaults to **3,072** dimensions and fails vector-length checks!
   3. **Never** call `ML.PREDICT` inside a latency-sensitive read-write
      transaction (remote RPCs hold Spanner locks). Generate embeddings in a
      read-only transaction or backfill via throttled Partitioned DML.
@@ -130,7 +133,11 @@ Check every generated schema and query against these hard Cloud Spanner rules:
       analytic window functions. Always compute server-side RRF ranks with
       `UNNEST(ARRAY(SELECT ... ORDER BY ... LIMIT k)) AS x WITH OFFSET AS rank`.
   15. Guard Relative Score Fusion (RSF) normalization denominators with
-      `NULLIF(max_score - min_score, 0)` (or `SAFE_DIVIDE`).
+      `NULLIF(max_score - min_score, 0)` (or `SAFE_DIVIDE`). Prefix queries that
+      reference an FTS `SCORE()` CTE multiple times (e.g., RSF `FULL OUTER JOIN` +
+      bounds CTE, or hybrid MCP SQL tools) with `@{optimizer_version=latest}`
+      (optimizer `>= 6`). Omit `@{scan_method=batch}` on Exact KNN CTEs joined
+      downstream (unsupported on the right side of apply/merge/hash joins).
   16. Re-run `CREATE OR REPLACE PROPERTY GRAPH {graph_name}` after adding new
       `TOKENLIST` or embedding columns to node/edge tables so GQL exposes them.
 

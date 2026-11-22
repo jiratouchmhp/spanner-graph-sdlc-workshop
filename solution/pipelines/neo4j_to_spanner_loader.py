@@ -396,7 +396,7 @@ def _prepare_dynamic_graph_records(
             rec = json.loads(line)
             node_id = str(rec["id"])
             node_label = str(rec["label"]).lower()
-            domain_key = f"{node_label}:{node_id}"
+            domain_key = node_id
             node_rows.append(
                 (
                     node_id,

@@ -85,12 +85,12 @@ Knowing exactly what the free local Emulator skips prevents wasted debugging hou
 ### Step 1: Run the 5-Check Live GCP Verification Suite
 ```bash
 # Preview checks safely first (or run live against your Bangkok sandbox)
-bash scripts/verify_live_gcp.sh --dry-run
-bash scripts/verify_live_gcp.sh
+make verify-live DRY_RUN=1
+make verify-live
 ```
 This verifies: (1) DDL describe, (2) ScaNN `PLAN`, (3) live Hero Query B 7-row fixture parity, (4) `sdlc_readonly_role` ALLOW on `PublicApiCatalogView` and DENY on `Owners.clearance_tier` / `INSERT INTO Adrs`, and (5) cross-region backup DR status.
 
-### Step 2: Optional Cross-Region Backup DR Copy (Bangkok → Singapore)
+### Step 2: Optional Cross-Region Backup DR Copy (Bangkok → Singapore, `~35–40 min` on 100 PU)
 ```bash
 # Preview or execute cross-region backup copy ($0.08/GiB Asia egress + $0.03432/GiB-mo SG storage)
 bash scripts/provision_workshop_env.sh backup-to-singapore --dry-run
@@ -98,17 +98,21 @@ bash scripts/provision_workshop_env.sh backup-to-singapore
 ```
 > **DR Restore Reminder:** Cloud Spanner backups preserve SQL FGAC roles and `GRANT` statements inside the schema, but do **not** include GCP IAM bindings. Always re-apply Step 3 of `solution/mcp/iam_and_model_armor_setup.sh` after restoring to Singapore.
 
-### Step 3: Clean Workshop Teardown (Confirm Active Project First!)
+### Step 3: Guaranteed Zero-Residual Workshop Teardown (Confirm Active Project First!)
 ```bash
 # Confirm you are deleting ONLY your workshop sandbox project!
 gcloud config get-value project
 
-# Deletes backups on both primary and optional Singapore DR instance, disables drop protection, deletes instances
-make cleanup-gcp
+# Full teardown (Cloud Run MCP, Secrets, all 7 SAs, DLP/Model Armor, GCS, Spanner) + guaranteed verify_zero_residual.sh audit
+make cleanup-all-gcp
+# Or Spanner-only teardown: make cleanup-gcp
+# Preview or re-run the 6-category zero-residual audit anytime:
+bash scripts/verify_zero_residual.sh --dry-run
 
 # Confirm zero Spanner instances remain
 gcloud spanner instances list
 ```
+> **Clean CLI Tip:** Set `gcloud auth application-default set-quota-project "${GOOGLE_CLOUD_PROJECT}"` and `export SPANNER_DISABLE_BUILTIN_METRICS=true` in live shells to silence ADC quota warnings and OpenTelemetry client metrics noise. `make cleanup-all-gcp` finishes by running `scripts/verify_zero_residual.sh` across all 6 GCP resource categories (handling `gcloud run services delete` 404 `could not be found` idempotently) so zero billable resources remain.
 
 ---
 
@@ -117,7 +121,7 @@ gcloud spanner instances list
 Open [`starter/sql/11_observability_and_studio_viz.sql`](../starter/sql/11_observability_and_studio_viz.sql) and complete the `TODO(Lab 8)` queries:
 1. **Spanner Studio Interactive Path Query:** `GRAPH SdlcGraph MATCH p = TRAIL ... RETURN SAFE_TO_JSON(p) AS blast_radius_path, PATH_LENGTH(p) AS hops LIMIT 50`.
 2. **Query Insights:** Top-CPU query against `SPANNER_SYS.QUERY_STATS_TOP_HOUR` exposing `RUN_IN_RW_TRANSACTION_EXECUTION_COUNT` and `AVG_DISK_IO_COST`.
-3. **Lock Insights:** P99 lock wait query against `SPANNER_SYS.LOCK_STATS_TOP_HOUR` converting microseconds to seconds (`/ 1000000.0`).
+3. **Lock Insights:** P99 lock wait query against `SPANNER_SYS.LOCK_STATS_TOP_HOUR` converting microseconds to seconds (`/ 1000000.0` or `/ 1e6`).
 4. **Split-Point & Lifecycle Health:** Query `SPANNER_SYS.USER_SPLIT_POINTS`, `TABLE_SIZES_STATS_1HOUR`, and `ROW_DELETION_POLICIES`.
 
 ### Antigravity IDE Prompt (Copy-Paste)

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import subprocess
 import sys
@@ -411,6 +412,191 @@ class TestMcpToolboxRbac(unittest.TestCase):
         )
         for col in restricted_owner_cols:
             self.assertNotIn(col, team_assets)
+
+    def test_v1_13_cli_flags_anchored_allowed_values_and_real_binary_validation(self) -> None:
+        """All launchers use canonical --config (zero --tools-file), anchored allowedValues, and pass real v1.13.1 binary."""
+        # 1. Verify scripts & Antigravity MCP config use --config and never invoke deprecated --tools-file
+        run_stdio_sh = (MCP_DIR / "run_toolbox_stdio.sh").read_text(encoding="utf-8")
+        render_mcp_py = (MCP_DIR / "render_mcp_config.py").read_text(encoding="utf-8")
+        iam_setup_sh = (MCP_DIR / "iam_and_model_armor_setup.sh").read_text(encoding="utf-8")
+        mcp_json_text = ANTIGRAVITY_MCP_CONFIG.read_text(encoding="utf-8")
+
+        self.assertIn('CONFIG_FLAG="--config"', run_stdio_sh)
+        self.assertNotIn('CONFIG_FLAG="--tools-file"', run_stdio_sh)
+        self.assertNotIn('"--tools-file"', render_mcp_py)
+        self.assertIn('"--config"', render_mcp_py)
+        self.assertNotIn("--tools-file", iam_setup_sh)
+        self.assertIn("--config=/app/tools.yaml", iam_setup_sh)
+        self.assertNotIn('"--tools-file"', mcp_json_text)
+        self.assertIn('"--config"', mcp_json_text)
+
+        for mode_flag in ("--stdio", "--http"):
+            dry = subprocess.run(
+                ["bash", "solution/mcp/run_toolbox_stdio.sh", mode_flag, "--dry-run"],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(dry.returncode, 0, dry.stderr or dry.stdout)
+            self.assertIn("--config ", dry.stdout)
+            self.assertNotIn("--tools-file", dry.stdout)
+            self.assertIn("--allowed-hosts=localhost,127.0.0.1", dry.stdout)
+            self.assertIn("--allowed-origins=", dry.stdout)
+            self.assertIn("--disable-version-check", dry.stdout)
+
+        # 2. Verify every allowedValues regex across master, personas, and starter is anchored (^...$)
+        starter_yaml = yaml.safe_load(
+            (REPO_ROOT / "starter" / "mcp" / "tools.yaml").read_text(encoding="utf-8")
+        )
+        all_configs = [
+            ("solution/mcp/tools.yaml", self.master_cfg),
+            ("starter/mcp/tools.yaml", starter_yaml),
+        ] + [(f"solution/mcp/personas/tools.{pid}.yaml", cfg) for pid, cfg in self.persona_cfgs.items()]
+
+        for label, cfg in all_configs:
+            for tname, tcfg in (cfg.get("tools") or {}).items():
+                for param in tcfg.get("parameters") or []:
+                    for pat in param.get("allowedValues") or []:
+                        self.assertIsInstance(pat, str)
+                        self.assertTrue(
+                            pat.startswith("^") and pat.endswith("$"),
+                            f"{label}:{tname}.{param['name']} has unanchored allowedValues {pat!r}",
+                        )
+
+        # Negative test: validate_master_config rejects bare "" unanchored allowedValues
+        bad_av_cfg = copy.deepcopy(self.master_cfg)
+        bad_av_cfg["tools"]["get_service_ownership_and_slas"]["parameters"][1]["allowedValues"] = ["", "payments"]
+        with self.assertRaises(ValueError):
+            self.renderer.validate_master_config(bad_av_cfg)
+
+        # 3. Real v1.13.1 binary validation (when solution/mcp/bin/toolbox is installed)
+        toolbox_bin = MCP_DIR / "bin" / "toolbox"
+        if toolbox_bin.is_file() and os.access(toolbox_bin, os.X_OK):
+            env = dict(os.environ)
+            env.update(
+                {
+                    "SPANNER_PROJECT": "demo-validation-project",
+                    "SPANNER_INSTANCE": "sdlc-kg-enterprise",
+                    "SPANNER_DATABASE": "sdlc_knowledge_graph",
+                    "GOOGLE_CLOUD_PROJECT": "demo-validation-project",
+                    "VERTEX_AI_LOCATION": "asia-southeast1",
+                    "GOOGLE_OAUTH_CLIENT_ID": "demo-client.apps.googleusercontent.com",
+                }
+            )
+            yaml_targets: list[tuple[Path, set[str]]] = [
+                (TOOLS_YAML_PATH, set(self.master_cfg["tools"].keys())),
+            ] + [
+                (REPO_ROOT / p["yaml_path"], set(p["allowed_tools"]))
+                for p in self.mcp_contract["personas"]
+            ]
+
+            for ypath, expected_tools in yaml_targets:
+                reqs = [
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2025-06-18",
+                            "capabilities": {},
+                            "clientInfo": {"name": "unittest", "version": "1.0"},
+                        },
+                    },
+                    {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+                ]
+                if ypath.name == "tools.impact-analyst.yaml":
+                    reqs.append(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 3,
+                            "method": "tools/call",
+                            "params": {
+                                "name": "get_service_ownership_and_slas",
+                                "arguments": {"service_id": "", "domain": "invalid-domain"},
+                            },
+                        }
+                    )
+                proc = subprocess.Popen(
+                    [
+                        str(toolbox_bin),
+                        "--config",
+                        str(ypath),
+                        "--stdio",
+                        "--allowed-hosts=localhost,127.0.0.1",
+                        "--allowed-origins=http://localhost:5000,http://127.0.0.1:5000",
+                        "--disable-version-check",
+                    ],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=env,
+                )
+                stdout, stderr = proc.communicate(
+                    "\n".join(json.dumps(r) for r in reqs) + "\n", timeout=10
+                )
+                self.assertEqual(proc.returncode, 0, f"{ypath.name} exited {proc.returncode}: {stderr}")
+                self.assertNotIn("deprecated", stderr.lower(), f"{ypath.name} deprecation warning: {stderr}")
+                self.assertNotIn(" WARN ", stderr, f"{ypath.name} unexpected WARN: {stderr}")
+                self.assertNotIn(" ERROR ", stderr, f"{ypath.name} unexpected ERROR: {stderr}")
+
+                responses = {json.loads(line)["id"]: json.loads(line) for line in stdout.splitlines() if line.strip()}
+                actual_tools = {t["name"] for t in responses[2]["result"]["tools"]}
+                self.assertEqual(actual_tools, expected_tools, f"{ypath.name} MCP tools/list mismatch")
+
+                if 3 in responses:
+                    call_res = responses[3]["result"]
+                    self.assertTrue(call_res.get("isError"), f"Expected invalid-domain rejection: {call_res}")
+                    self.assertIn("not an allowed value", call_res["content"][0]["text"])
+
+    def test_live_spanner_mcp_sql_shapes_and_optimizer_hints(self) -> None:
+        """Hybrid MCP SQL tools include @{optimizer_version=latest} and avoid nullable ARRAY<STRUCT> scalar subqueries."""
+        starter_yaml = yaml.safe_load(
+            (REPO_ROOT / "starter" / "mcp" / "tools.yaml").read_text(encoding="utf-8")
+        )
+        all_configs = [
+            ("solution/mcp/tools.yaml", self.master_cfg),
+            ("starter/mcp/tools.yaml", starter_yaml),
+        ] + [(f"solution/mcp/personas/tools.{pid}.yaml", cfg) for pid, cfg in self.persona_cfgs.items()]
+
+        hybrid_tool_names = {"analyze_api_blast_radius_graphrag", "search_sdlc_knowledge_hybrid"}
+        nullable_array_subquery_re = re.compile(
+            r"\(\s*SELECT\s+(?:governing_adrs|applicable_requirements|markdown_citations|ARRAY_AGG\s*\()",
+            re.IGNORECASE,
+        )
+
+        for label, cfg in all_configs:
+            tools = cfg.get("tools") or {}
+            for tname, tcfg in tools.items():
+                stmt = str(tcfg.get("statement", ""))
+
+                # 1. Every hybrid FTS SCORE() MCP tool must include @{optimizer_version=latest}
+                if tname in hybrid_tool_names:
+                    self.assertRegex(
+                        stmt,
+                        r"@\{\s*optimizer_version\s*=\s*latest\s*\}",
+                        f"{label}:{tname} must include @{{optimizer_version=latest}} for multi-referenced SCORE() CTE",
+                    )
+
+                # 2. Never project nullable ARRAY<STRUCT<...>> scalar subqueries (causes Spanner Unimplemented error)
+                self.assertNotIn(
+                    "(SELECT governing_adrs FROM target_adrs)",
+                    stmt,
+                    f"{label}:{tname} must not use nullable (SELECT governing_adrs FROM target_adrs) scalar subquery",
+                )
+                self.assertIsNone(
+                    nullable_array_subquery_re.search(stmt),
+                    f"{label}:{tname} contains nullable ARRAY scalar subquery; use ARRAY(SELECT AS STRUCT ...)",
+                )
+
+                # 3. Tools returning structured nested arrays must use non-null ARRAY(SELECT AS STRUCT ...)
+                if tname in {"analyze_api_blast_radius_graphrag", "audit_compliance_blast_radius"}:
+                    self.assertRegex(
+                        stmt,
+                        r"(?i)ARRAY\s*\(\s*SELECT\s+AS\s+STRUCT\b",
+                        f"{label}:{tname} must project nested collections via non-null ARRAY(SELECT AS STRUCT ...)",
+                    )
 
 
 if __name__ == "__main__":

@@ -6,10 +6,15 @@
 #
 # Examples:
 #   make help
+#   make preflight
+#   make install
+#   make install-mcp
 #   make test
 #   make validate-skills
 #   make verify-starter-stubs
+#   make lab1-no-docker
 #   make TRACK=starter verify-lab LAB=1
+#   make TRACK=starter MODE=express verify-lab LAB=1
 #   make TRACK=solution verify-lab LAB=all
 #   make sizing PRESET=all REGION=asia-southeast3
 #   make sizing WORKSHEET=starter/tools/customer_scale_worksheet.json
@@ -18,51 +23,97 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
-PYTHON ?= python3
+SYSTEM_PYTHON ?= python3
+VENV_DIR ?= .venv
+VENV_PYTHON := $(VENV_DIR)/bin/python
+# Auto-prefer .venv/bin/python when executable and populated (pyyaml present), else python3 (overrideable via PYTHON=...)
+PYTHON ?= $(if $(wildcard $(VENV_PYTHON)),$(if $(shell test -x "$(VENV_PYTHON)" && "$(VENV_PYTHON)" -c "import yaml" 2>/dev/null && echo yes),$(VENV_PYTHON),$(SYSTEM_PYTHON)),$(SYSTEM_PYTHON))
+
 TRACK ?= solution
 LAB ?= all
+MODE ?= full
 PRESET ?= all
 REGION ?= asia-southeast3
 DR_BACKUP_REGION ?=
 WORKSHEET ?=
 SPANNER_PROCESSING_UNITS ?= 100
+STRICT_GCP ?=
+REQUIRE_DR ?=
+DRY_RUN ?=
 
-# Safely load `.env` when present without overriding explicit shell variables
-LOAD_ENV = set -a; [ -f .env ] && source .env; set +a
-
-.PHONY: help install test validate-skills verify-starter-stubs verify-lab \
-        sizing dry-run-pipelines demo-mcp-mock provision-gcp cleanup-gcp
+.PHONY: help preflight install install-mcp test validate-skills \
+        verify-starter-stubs verify-lab lab1-no-docker sizing \
+        dry-run-pipelines demo-mcp-mock provision-gcp verify-live \
+        cleanup-gcp cleanup-all-gcp
 
 help: ## Print available workshop targets, variables, and quickstart examples
 	@echo "Cloud Spanner Enterprise SDLC Knowledge Graph & GraphRAG Workshop"
 	@echo ""
-	@echo "Usage: make <target> [TRACK=starter|solution] [LAB=1..8|all] [PRESET=all|workshop|small|medium|large] [REGION=asia-southeast3|asia-southeast1|us-central1]"
-	@echo "Defaults: TRACK=$(TRACK) | LAB=$(LAB) | PRESET=$(PRESET) | REGION=$(REGION)"
+	@echo "Usage: make <target> [TRACK=starter|solution] [LAB=1..8|all] [MODE=full|express] [PRESET=all|workshop|small|medium|large] [REGION=asia-southeast3|asia-southeast1|us-central1]"
+	@echo "Defaults: PYTHON=$(PYTHON) | TRACK=$(TRACK) | LAB=$(LAB) | MODE=$(MODE) | PRESET=$(PRESET) | REGION=$(REGION)"
 	@echo ""
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@echo ""
 	@echo "Quickstart Examples:"
+	@echo "  make preflight"
+	@echo "  make install"
+	@echo "  make install-mcp"
 	@echo "  make test"
 	@echo "  make validate-skills"
 	@echo "  make verify-starter-stubs"
+	@echo "  make lab1-no-docker"
 	@echo "  make TRACK=starter verify-lab LAB=1"
+	@echo "  make TRACK=starter MODE=express verify-lab LAB=1"
 	@echo "  make TRACK=solution verify-lab LAB=all"
 	@echo "  make sizing PRESET=all REGION=asia-southeast3 DR_BACKUP_REGION=asia-southeast1"
 	@echo "  make sizing WORKSHEET=starter/tools/customer_scale_worksheet.json"
 	@echo "  make dry-run-pipelines"
 	@echo "  make demo-mcp-mock"
+	@echo "  make provision-gcp TRACK=solution"
+	@echo "  make verify-live"
+	@echo "  make cleanup-all-gcp"
 
-install: ## Install Python dependencies for live GCP pipelines and ADK/MCP demos
-	@echo "==> Installing pipeline dependencies (solution/pipelines/requirements.txt)..."
-	$(PYTHON) -m pip install -r solution/pipelines/requirements.txt
-	@echo "==> Optional Lab 6 ADK/MCP live packages: $(PYTHON) -m pip install -r solution/mcp/requirements.txt"
+preflight: ## Run fast 5-second attendee readiness check (pass STRICT_GCP=1 for live GCP gate)
+	@bash scripts/preflight_check.sh $(if $(filter 1 true TRUE yes YES,$(STRICT_GCP)),--strict-gcp,)
+
+install: ## Create PEP-668-safe .venv and install pipeline dependencies (solution/pipelines/requirements.txt)
+	@if [ ! -x "$(VENV_PYTHON)" ]; then \
+		echo "==> Creating PEP-668-safe virtualenv at $(VENV_DIR) using $(SYSTEM_PYTHON)..."; \
+		$(SYSTEM_PYTHON) -m venv "$(VENV_DIR)" 2>/dev/null || $(SYSTEM_PYTHON) -m venv --without-pip "$(VENV_DIR)"; \
+	fi
+	@if ! "$(VENV_PYTHON)" -m pip --version >/dev/null 2>&1; then \
+		echo "==> Bootstrapping pip inside $(VENV_DIR) (system Python lacks ensurepip)..."; \
+		if command -v uv >/dev/null 2>&1; then \
+			uv venv --seed "$(VENV_DIR)"; \
+		else \
+			TMP_GETPIP="$$(mktemp -t get-pip-XXXXXX.py)"; \
+			trap 'rm -f "$$TMP_GETPIP"' EXIT; \
+			curl -fsSL https://bootstrap.pypa.io/get-pip.py -o "$$TMP_GETPIP"; \
+			"$(VENV_PYTHON)" "$$TMP_GETPIP"; \
+			rm -f "$$TMP_GETPIP"; \
+		fi; \
+	fi
+	@echo "==> Upgrading pip inside $(VENV_DIR)..."
+	"$(VENV_PYTHON)" -m pip install --upgrade pip
+	@echo "==> Installing pipeline dependencies (solution/pipelines/requirements.txt) into $(VENV_DIR)..."
+	"$(VENV_PYTHON)" -m pip install -r solution/pipelines/requirements.txt
+	@echo "==> Done! 'make' targets auto-detect $(VENV_PYTHON) (or run: source $(VENV_DIR)/bin/activate)."
+	@echo "==> Optional Lab 6 ADK/MCP live packages: make install-mcp"
+
+install-mcp: ## Install Lab 6 ADK/MCP & Model Armor dependencies (solution/mcp/requirements.txt) inside .venv
+	@if [ ! -x "$(VENV_PYTHON)" ] || ! "$(VENV_PYTHON)" -m pip --version >/dev/null 2>&1; then \
+		$(MAKE) install; \
+	fi
+	@echo "==> Installing Lab 6 ADK/MCP dependencies (solution/mcp/requirements.txt) into $(VENV_DIR)..."
+	"$(VENV_PYTHON)" -m pip install -r solution/mcp/requirements.txt
+	@echo "==> Done! Lab 6 MCP/ADK packages installed inside $(VENV_DIR)."
 
 test: ## Run all offline stdlib unittest modules under tests/ (zero pytest dependency)
 	@if [ ! -d tests ]; then \
 		echo "ERROR: tests/ directory not found." >&2; \
 		exit 1; \
 	fi
-	@echo "==> Running full offline unittest suite (python3 -m unittest)..."
+	@echo "==> Running full offline unittest suite ($(PYTHON) -m unittest)..."
 	$(PYTHON) -m unittest discover -s tests -p "test_*.py" -v
 
 validate-skills: ## Validate all 8 Antigravity skills under .agents/skills/ and MCP config
@@ -81,9 +132,32 @@ verify-starter-stubs: ## Confirm all 8 labs fail on unsolved starter/ stubs and 
 		$(PYTHON) -m unittest tests/test_starter_vs_solution_parity.py -v; \
 	fi
 
-verify-lab: ## Verify Labs 1..8 or all offline (usage: make TRACK=starter|solution verify-lab LAB=1..8|all)
-	@echo "==> Verifying LAB=$(LAB) on TRACK=$(TRACK)..."
-	$(PYTHON) scripts/verify_lab.py --track "$(TRACK)" --lab "$(LAB)"
+verify-lab: ## Verify Labs 1..8 or all offline (usage: make TRACK=starter|solution [MODE=full|express] verify-lab LAB=1..8|all)
+	@echo "==> Verifying LAB=$(LAB) on TRACK=$(TRACK) (MODE=$(MODE))..."
+	$(PYTHON) scripts/verify_lab.py --track "$(TRACK)" --lab "$(LAB)" --mode "$(MODE)"
+
+lab1-no-docker: ## Run Zero-Docker Lab 1 Neo4j CE & APOC streaming simulator, parity diff & ISO GQL check
+	@echo "==> [1/2] Running Zero-Docker Neo4j CE & APOC streaming export simulator..."
+	@if [ -f data/structured/no_docker_neo4j_sim.py ]; then \
+		$(PYTHON) data/structured/no_docker_neo4j_sim.py --demo; \
+	else \
+		$(PYTHON) data/structured/stage_apoc_export.py; \
+	fi
+	@if [ "$(origin TRACK)" = "command line" ]; then \
+		echo "==> [2/2] Verifying Lab 1 openCypher -> ISO GQL cookbook (TRACK=$(TRACK), MODE=$(MODE))..."; \
+		$(PYTHON) scripts/verify_lab.py --track "$(TRACK)" --lab 1 --mode "$(MODE)"; \
+	elif [ -f solution/sql/09_opencypher_to_gql_cookbook.sql ]; then \
+		echo "==> [2/2] Verifying reference Lab 1 openCypher -> ISO GQL cookbook (TRACK=solution)..."; \
+		$(PYTHON) scripts/verify_lab.py --track solution --lab 1 --mode "$(MODE)"; \
+		echo "Next (attendees): complete TODO(Lab 1) in starter/sql/09_opencypher_to_gql_cookbook.sql, then run:"; \
+		echo "  make TRACK=starter verify-lab LAB=1          # Full Track B (all 5 queries)"; \
+		echo "  make TRACK=starter MODE=express verify-lab LAB=1  # Express Track A (queries 1-3)"; \
+	else \
+		echo "==> [2/2] Starter-only workspace detected (solution/ absent) — simulator & APOC parity verified!"; \
+		echo "Next: complete TODO(Lab 1) in starter/sql/09_opencypher_to_gql_cookbook.sql, then run:"; \
+		echo "  make TRACK=starter verify-lab LAB=1          # Full Track B (all 5 queries)"; \
+		echo "  make TRACK=starter MODE=express verify-lab LAB=1  # Express Track A (queries 1-3)"; \
+	fi
 
 sizing: ## Run verified 2026 Bangkok/Singapore sizing & 3-store TCO calculator (supports PRESET, REGION, DR_BACKUP_REGION, WORKSHEET)
 	@set -eu; \
@@ -118,12 +192,18 @@ demo-mcp-mock: ## Run Lab 6 3-persona RBAC & prompt-injection fail-closed demo o
 	@echo "==> Running Lab 6 multi-agent RBAC & prompt-injection fail-closed demo (--mock)..."
 	$(PYTHON) solution/mcp/adk_multi_agent_demo.py --mock
 
-provision-gcp: ## [LIVE GCP] Provision Bangkok 100-PU Enterprise sandbox (override REGION=asia-southeast1 for fallback)
-	@$(LOAD_ENV); \
-	echo "==> Provisioning Cloud Spanner Enterprise sandbox in $(REGION) ($(SPANNER_PROCESSING_UNITS) PU)..."; \
-	bash scripts/provision_workshop_env.sh create --region "$(REGION)" --processing-units "$(SPANNER_PROCESSING_UNITS)"
+provision-gcp: ## [LIVE GCP] Provision Bangkok 100-PU Enterprise sandbox (supports TRACK=starter|solution, REGION=asia-southeast1 fallback)
+	@echo "==> Provisioning Cloud Spanner Enterprise sandbox in $(REGION) ($(SPANNER_PROCESSING_UNITS) PU, TRACK=$(TRACK))..."; \
+	bash scripts/provision_workshop_env.sh create --region "$(REGION)" --processing-units "$(SPANNER_PROCESSING_UNITS)" --track "$(TRACK)" $(if $(filter 1 true TRUE yes YES,$(DRY_RUN)),--dry-run,)
+
+verify-live: ## [LIVE GCP] Run end-to-end live Cloud Spanner verification (DDL, ScaNN PLAN, Hero Query B, FGAC & DR)
+	@echo "==> Running live Cloud Spanner verification suite in $(REGION)..."; \
+	bash scripts/verify_live_gcp.sh --region "$(REGION)" $(if $(filter 1 true TRUE yes YES,$(REQUIRE_DR)),--require-dr,) $(if $(filter 1 true TRUE yes YES,$(DRY_RUN)),--dry-run,)
 
 cleanup-gcp: ## [LIVE GCP] Delete workshop Cloud Spanner instance, database, and DR backup copies cleanly
-	@$(LOAD_ENV); \
-	echo "==> Cleaning up Cloud Spanner workshop environment..."; \
-	bash scripts/provision_workshop_env.sh cleanup --region "$(REGION)"
+	@echo "==> Cleaning up Cloud Spanner workshop environment..."; \
+	bash scripts/provision_workshop_env.sh cleanup --region "$(REGION)" $(if $(filter 1 true TRUE yes YES,$(DRY_RUN)),--dry-run,)
+
+cleanup-all-gcp: ## [LIVE GCP] Full teardown (Cloud Run MCP, Secrets, SAs, DLP/Model Armor, GCS, Spanner) + zero-residual audit
+	@echo "==> Running full workshop GCP teardown (--all) and zero-residual verification..."; \
+	bash scripts/provision_workshop_env.sh cleanup --all --region "$(REGION)" $(if $(filter 1 true TRUE yes YES,$(DRY_RUN)),--dry-run,)

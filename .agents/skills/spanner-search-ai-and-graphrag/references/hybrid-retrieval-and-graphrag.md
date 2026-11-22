@@ -93,9 +93,16 @@ Use RSF when preserving relative score magnitudes and retriever weights ($w_r$)
 matters more than pure rank order. Convert distance metrics (e.g., cosine
 distance) to similarity (`1.0 - distance`) and guard min-max denominators with
 `NULLIF(max_s - min_s, 0)` (or `SAFE_DIVIDE`) to prevent divide-by-zero when
-all candidates tie or only one candidate matches:
+all candidates tie or only one candidate matches.
+**CRITICAL Optimizer Hint (`@{optimizer_version=latest}`):** Whenever an FTS
+CTE calling `SCORE()` is referenced multiple times in the same query (for
+example, `fts_raw` scanned by both `FULL OUTER JOIN` and `fts_bounds`, or
+multi-referenced hybrid CTEs inside MCP Toolbox tools), prefix the statement
+with **`@{optimizer_version=latest}`** (requires optimizer version `>= 6`) so
+Spanner compiles the shared FTS `SCORE()` CTE cleanly:
 
 ```sql
+@{optimizer_version=latest}
 WITH ann_raw AS (
   -- Keep APPROX_COSINE_DISTANCE bare, aliased, and the sole ORDER BY key
   SELECT doc_id,
@@ -386,6 +393,12 @@ Spanner Enterprise database.
 6. **Calling Spanner Graph's language "openCypher":** Spanner Graph implements
    **ISO GQL (`ISO/IEC 39075:2024`)** and **ISO SQL/PGQ (`ISO/IEC 9075-16:2023`)**
    (use `GRAPH_TABLE` inside SQL `SELECT` and `GRAPH ... NEXT` for standalone GQL).
+7. **Placing `@{scan_method=batch}` on a joined Exact KNN CTE:** Batch scan is
+   unsupported on the right side of apply/merge/hash joins — keep it on
+   standalone Exact KNN queries and omit it on GraphRAG CTEs joined downstream.
+8. **Omitting `@{optimizer_version=latest}` on multi-referenced `SCORE()` CTEs:**
+   RSF (`fts_raw` + `fts_bounds`) and multi-referenced hybrid FTS CTEs require
+   optimizer version `>= 6` (`@{optimizer_version=latest}`).
 
 Official documentation & samples:
 - [Hybrid Full-Text and Vector Search](https://docs.cloud.google.com/spanner/docs/hybrid-full-text-vector-search)

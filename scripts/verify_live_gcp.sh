@@ -20,6 +20,15 @@
 # =============================================================================
 set -euo pipefail
 
+if ! command -v gcloud >/dev/null 2>&1; then
+  for _sdk_dir in "${HOME}/google-cloud-sdk/bin" "${HOME}/.local/bin"; do
+    if [[ -x "${_sdk_dir}/gcloud" ]]; then
+      export PATH="${_sdk_dir}:${PATH}"
+      break
+    fi
+  done
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -78,7 +87,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN="true"; shift ;;
     --require-dr) REQUIRE_DR="true"; shift ;;
     -h|--help)
-      echo "Usage: bash scripts/verify_live_gcp.sh [--project ID] [--region REG] [--require-dr] [--dry-run]"
+      echo "Usage: bash scripts/verify_live_gcp.sh [--project ID] [--region REG] [--vertex-location LOC] [--instance ID] [--dr-instance ID] [--database ID] [--require-dr] [--dry-run]"
       exit 0
       ;;
     *)
@@ -129,12 +138,21 @@ else
   echo "[PASS] DDL objects verified (SdlcGraph, DocumentChunks, SdlcSynonymDict, IdxDocumentChunksEmbedding, PublicApiCatalogView)."
 fi
 
+PYTHON_BIN="${PYTHON:-}"
+if [[ -z "${PYTHON_BIN}" ]]; then
+  if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
+    PYTHON_BIN="${REPO_ROOT}/.venv/bin/python"
+  else
+    PYTHON_BIN="python3"
+  fi
+fi
+
 # ------------------------------------------------------------------------------
 # Check 2: ScaNN ANN Execution Plan Verification (--query-mode=PLAN)
 # ------------------------------------------------------------------------------
 echo ""
 echo "[CHECK 2/5] Verifying ScaNN ANN vector index plan (--query-mode=PLAN)..."
-ZERO_VEC_768="$(python3 -c "print('[' + ','.join(['CAST(0.01 AS FLOAT32)'] + ['CAST(0.0 AS FLOAT32)'] * 767) + ']')")"
+ZERO_VEC_768="$("${PYTHON_BIN}" -c "print('[' + ','.join(['CAST(0.01 AS FLOAT32)'] + ['CAST(0.0 AS FLOAT32)'] * 767) + ']')")"
 SCANN_PLAN_SQL="SELECT chunk_id, APPROX_COSINE_DISTANCE(embedding, ${ZERO_VEC_768}, options => JSON '{\"num_leaves_to_search\": 10}') AS approx_dist FROM DocumentChunks WHERE embedding IS NOT NULL ORDER BY approx_dist ASC LIMIT 5"
 
 if [[ "${DRY_RUN}" == "true" ]]; then
@@ -159,7 +177,7 @@ fi
 echo ""
 echo "[CHECK 3/5] Running Hero API Blast-Radius GraphRAG Query B (api-payments-charge-v2)..."
 if [[ "${DRY_RUN}" == "true" ]]; then
-  python3 "${REPO_ROOT}/labs/run_hero_query.py" \
+  "${PYTHON_BIN}" "${REPO_ROOT}/labs/run_hero_query.py" \
     --dry-run \
     --query B \
     --api-id api-payments-charge-v2 \
@@ -168,7 +186,7 @@ if [[ "${DRY_RUN}" == "true" ]]; then
     --vertex-location "${VERTEX_AI_LOCATION}" \
     --check-fixture "${REPO_ROOT}/solution/sql/fixtures/07_hero_expected_rows.json"
 else
-  python3 "${REPO_ROOT}/labs/run_hero_query.py" \
+  "${PYTHON_BIN}" "${REPO_ROOT}/labs/run_hero_query.py" \
     --query B \
     --api-id api-payments-charge-v2 \
     --project "${PROJECT_ID}" \

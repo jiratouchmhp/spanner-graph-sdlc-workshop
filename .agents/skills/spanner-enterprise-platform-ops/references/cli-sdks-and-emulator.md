@@ -24,6 +24,7 @@ gcloud config set spanner/instance "{instance_id}"
 
 ```bash
 # Provision Enterprise regional instance (Bangkok example; >= 1 node for production)
+# GOTCHA: --description (instance.display_name) MUST be strictly 4-30 characters long!
 gcloud spanner instances create "{instance_id}" \
   --project="{project_id}" \
   --config="regional-asia-southeast3" \
@@ -67,18 +68,22 @@ gcloud spanner databases execute-sql "{database_id}" \
   --project="{project_id}" --instance="{instance_id}" \
   --query-mode=PROFILE \
   [--database-role="{role_name}"] \
-  --sql="SELECT * FROM {table_name} WHERE id = @id" \
-  --params="id=123"
+  --sql="SELECT * FROM {table_name} WHERE id = 123"
 
-# Database deletion: DDL has NO `DROP DATABASE` statement (blocked if drop protection is enabled)
+# Database deletion: DDL has NO `DROP DATABASE` statement (blocked if drop protection is enabled).
+# Disable drop protection via `databases update` (NOT `instances update`) before deleting:
+gcloud spanner databases update "{database_id}" \
+  --project="{project_id}" --instance="{instance_id}" --no-enable-drop-protection
 gcloud spanner databases delete "{database_id}" \
   --project="{project_id}" --instance="{instance_id}"
 ```
 
-### Critical `gcloud spanner rows` Gotchas
+### Critical `gcloud spanner` CLI Gotchas
 
-1. **PostgreSQL `rows insert` Failure**: `gcloud spanner rows insert` (mutation-based) fails on PostgreSQL-dialect databases due to a known table-name resolution issue. **Always use `gcloud spanner databases execute-sql` with SQL DML (`INSERT INTO ...`) on PostgreSQL databases.**
-2. **Commas Inside `--data=` Values**: When a column value contains a comma, override the key-value delimiter using `^:^`:
+1. **Instance `--description` (`instance.display_name`) 4–30 Character Limit**: `gcloud spanner instances create --description="..."` fails immediately with `INVALID_ARGUMENT: Display name must be between 4-30 characters long` if the string is shorter than 4 or longer than 30 characters. Guard dynamic descriptions (such as those embedding region names) to `<= 30` characters.
+2. **Drop Protection Flag Scope**: `--[no-]enable-drop-protection` is valid ONLY on `gcloud spanner databases update`, NOT on `gcloud spanner instances update`. Before deleting an instance, iterate over every database in that instance and disable drop protection on each database.
+3. **PostgreSQL `rows insert` Failure**: `gcloud spanner rows insert` (mutation-based) fails on PostgreSQL-dialect databases due to a known table-name resolution issue. **Always use `gcloud spanner databases execute-sql` with SQL DML (`INSERT INTO ...`) on PostgreSQL databases.**
+4. **Commas Inside `--data=` Values**: When a column value contains a comma, override the key-value delimiter using `^:^`:
    ```bash
    gcloud spanner rows insert --instance="{instance_id}" --database="{database_id}" \
      --table="{table_name}" --data='^:^Id=1:FullName=Smith, Jane'

@@ -124,7 +124,11 @@ Open [`starter/sql/10_validate_migration_parity.sql`](../starter/sql/10_validate
 ### Verify Lab 2 Offline
 
 ```bash
+# Track B (Full, Tiers 1-4)
 make TRACK=starter verify-lab LAB=2
+
+# Track A (4-Hour Express, Tiers 1-3)
+make TRACK=starter MODE=express verify-lab LAB=2
 ```
 
 **Checkpoint Expected Output:** `[PASS] Lab 2 (starter/)` — confirming `68` nodes, `174` explicit + `60` dual-projected (`234` logical) edges, `45` Markdown docs, and all 4 parity tiers.

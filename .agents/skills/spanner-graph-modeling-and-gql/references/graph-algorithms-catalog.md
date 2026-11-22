@@ -13,9 +13,10 @@ Authoritative reference for Cloud Spanner **Graph Algorithms** (Preview; Enterpr
   - **Bangkok Primary (`regional-asia-southeast3`)**: **`$1.2285 / 1,000 SPU-hr`**
   - **Singapore Secondary (`regional-asia-southeast1`)**: **`$1.33848 / 1,000 SPU-hr`**
   - **US Reference (`regional-us-central1`)**: **`$1.17 / 1,000 SPU-hr`**
-- **Least-Privilege IAM**:
-  - **Run Algorithms**: Grant `roles/spanner.graphIntelligenceUser` (provides `spanner.databases.runGraphAlgorithms` and automatically includes `roles/spanner.databaseReaderWithDataBoost`).
-  - **Cloud Storage Export**: Grant `roles/storage.objectAdmin` to the Google-managed Spanner service agent `service-{project_number}@gcp-sa-spanner.iam.gserviceaccount.com`.
+- **Least-Privilege IAM (Live-Verified Gotchas)**:
+  - **Caller Role (Mandatory Even for Project Owners!)**: The invoking principal **MUST** explicitly hold `roles/spanner.graphIntelligenceUser` (grants `spanner.databases.runGraphAlgorithms` and includes `roles/spanner.databaseReaderWithDataBoost`). **Even `roles/owner` does NOT include `spanner.databases.useDataBoost`** and fails with `PERMISSION_DENIED` until `roles/spanner.graphIntelligenceUser` is bound.
+  - **Spanner Write-Back (`format = 'CLOUD_SPANNER'`)**: Grant database-level **`roles/spanner.databaseUser` + `roles/spanner.graphIntelligenceUser`** to the Google-managed Spanner service agent `service-{project_number}@gcp-sa-spanner.iam.gserviceaccount.com` so Data Boost can write results back into the destination Spanner table.
+  - **Cloud Storage Export (`format = 'CSV'|'PARQUET'|'AVRO'`)**: Grant `roles/storage.objectAdmin` to `service-{project_number}@gcp-sa-spanner.iam.gserviceaccount.com`.
 
 ---
 
@@ -44,7 +45,7 @@ RETURN <results>;
 | `edge_labels` | `ARRAY<STRING>` | *(all)* | **Supported ONLY with `CALL` (not `CALL PER ()`)**. Includes edges matching at least one label. |
 | `edge_weight_property` | `STRING` | *(weight `1`)* | Numeric edge property used as weight; defaults every edge to `1` if omitted. |
 | `machine_category` | `STRING` | `'default'` | `'default'` or `'large'`. Set `'large'` when input exceeds **> 1 billion nodes and > 10 billion edges**. |
-| `fallback_compute_region` | `STRING` | *(none)* | Fallback region under temporary capacity constraints. **MUST remain in the same jurisdiction** as the Spanner instance's home region (e.g., `us-central1` for `us-east1`). *Residency note*: A Thailand-resident `asia-southeast3` instance cannot fall back across national borders to another country's jurisdiction. |
+| `fallback_compute_region` | `STRING` | *(none)* | Exact SQL TVF parameter name is **`fallback_compute_region => '{region}'`** (NOT `fallback_region`). Fallback region under temporary capacity constraints **MUST remain in the same jurisdiction** as the Spanner instance's home region (e.g., `us-central1` for `us-east1`). *Residency note*: A Thailand-resident `asia-southeast3` instance cannot fall back across national borders to another country's jurisdiction. |
 | `max_idle_time` | `STRING` | `'30m'` | Warm-compute retention window after completion to skip cold starts on iterative runs (`ns`, `us`/`µs`, `ms`, `s`, `m`, `h`, e.g., `'4m'`, `'1.5h'`, `'1h45m'`). **Billable while idle** — set low (e.g., `'1m'`–`'5m'`) on scheduled batch jobs. |
 
 ---
@@ -181,6 +182,7 @@ All 10 algorithm families accept the 6 common parameters from Section 2.2. Notat
 10. **`ShortestPath`** (`YIELD source_node, target_node, path, cost`):
     - Parallel `rho`-stepping SSSP per source node with deterministic tie-breaking (min hops, then lexicographically min node IDs backwards from target). Self-distance = `0.0`; unreachable = `-1.0` internally.
     - Params: `source_nodes` (`ARRAY<GRAPH_NODE>`, **REQUIRED**), `target_nodes` (`ARRAY<GRAPH_NODE>`, **REQUIRED**).
+    - **CRITICAL `RETURN` Mandate**: `ShortestPath` requires **EVERY yielded node variable** (`source_node` **AND** `target_node`) to appear in the `RETURN` clause (e.g., `RETURN source_node.id AS id, 'sp_v1' AS algo_run_id, target_node.id AS target_id, PATH_LENGTH(path) AS int_val, cost AS float_val`). Omitting `target_node` even when `target_nodes` has a single target fails compilation — include a nullable `target_id` column on your output table.
     - Complexity: Work `O(|S| * D * m * log(n^2 / (m * rho)))`.
 
 ---
@@ -192,15 +194,17 @@ All 10 algorithm families accept the 6 common parameters from Section 2.2. Notat
 3. **Iterative Experimentation Without Repeated `ALTER TABLE`**: Persist tagged experiment runs into generic interleaved child tables and expose them via a `SQL SECURITY INVOKER` view + separate augmented graph (keeping the base table-backed graph for running new algorithms!):
 
 ```sql
-CREATE TABLE {node_table}AlgoProperty (
+-- Use CREATE TABLE IF NOT EXISTS so iterative setup scripts are safely re-runnable
+CREATE TABLE IF NOT EXISTS {node_table}AlgoProperty (
   id          INT64 NOT NULL,
   algo_run_id STRING(200) NOT NULL,
+  target_id   INT64,                -- Populated by ShortestPath (must project target_node!)
   int_val     INT64,
   float_val   FLOAT64,
 ) PRIMARY KEY (id, algo_run_id),
   INTERLEAVE IN PARENT {node_table};
 
-CREATE TABLE {node_table}AlgoEdge (
+CREATE TABLE IF NOT EXISTS {node_table}AlgoEdge (
   id          INT64 NOT NULL,
   algo_run_id STRING(200) NOT NULL,
   to_id       INT64 NOT NULL,

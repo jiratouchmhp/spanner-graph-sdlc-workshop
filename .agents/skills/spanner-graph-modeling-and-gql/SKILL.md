@@ -34,7 +34,7 @@ Opinionated production playbook for designing, querying, tuning, analyzing, and 
 | **Standards** | **ISO/IEC 9075-16:2023 (SQL/PGQ)** + **ISO/IEC 39075:2024 (GQL)** | Spanner Graph is **ISO GQL**, NOT openCypher. Default path mode is `WALK` (repeatable elements allowed). |
 | **Preview Gates** | Visual Schema Editor, Graph Algorithms, Remote Functions, LangChain | Remote Functions require **>= 1,000 PUs (>= 1 node)** — NOT supported on fractional dev instances (< 1,000 PUs). |
 | **Regional Example (PDPA / APAC)** | Primary: `regional-asia-southeast3` (Bangkok; zones `a`, `b`, `c`; 99.99% SLA)<br>Secondary: `regional-asia-southeast1` (Singapore) | Bangkok Enterprise compute: `$1.2915/node-hr` (`$942.795/node-mo`); Data Boost: `$1.2285 / 1,000 SPU-hr`. Singapore Data Boost: `$1.33848 / 1,000 SPU-hr`; hosts Vertex AI regional endpoints (~25 ms RTT from Bangkok) and cross-region backup copy DR (`$0.08/GiB` Asia egress). |
-| **Least-Privilege IAM** | DDL: `roles/spanner.databaseAdmin`<br>GQL Read/Profile: `roles/spanner.databaseReader`<br>Graph Algorithms: `roles/spanner.graphIntelligenceUser` | `roles/spanner.graphIntelligenceUser` grants `spanner.databases.runGraphAlgorithms` and includes `roles/spanner.databaseReaderWithDataBoost`. For GCS algorithm exports, grant `roles/storage.objectAdmin` to `service-{project_number}@gcp-sa-spanner.iam.gserviceaccount.com`. For Remote Functions, ensure `roles/spanner.serviceAgent`. |
+| **Least-Privilege IAM** | DDL: `roles/spanner.databaseAdmin`<br>GQL Read/Profile: `roles/spanner.databaseReader`<br>Graph Algorithms: `roles/spanner.graphIntelligenceUser` | Caller **MUST** hold `roles/spanner.graphIntelligenceUser` (even `roles/owner` omits `spanner.databases.useDataBoost`!). For `format = 'CLOUD_SPANNER'` write-back, grant `service-{project_number}@gcp-sa-spanner.iam.gserviceaccount.com` database-level `roles/spanner.databaseUser` + `roles/spanner.graphIntelligenceUser`; for GCS exports, grant `roles/storage.objectAdmin`. For Remote Functions, ensure `roles/spanner.serviceAgent`. |
 
 ---
 
@@ -80,6 +80,8 @@ Enforce these before writing any DDL or GQL:
    - Standalone `ORDER BY` before `RETURN` is **silently ignored** unless immediately followed by `LIMIT`/`OFFSET`; inside `RETURN`, **`OFFSET` must precede `LIMIT`**.
    - Put filters on optional variables inside `OPTIONAL MATCH ... WHERE ...` (a trailing `FILTER` converts it into an inner join).
    - Never force `@{JOIN_METHOD=HASH_JOIN}` on anchored variable-length paths (`->{1,n}`).
+   - Always give computed outputs an explicit `AS` alias even inside scalar `VALUE { ... }` subqueries (e.g., `VALUE { MATCH ... RETURN COUNT(*) AS cnt }`).
+   - In Data Boost Graph Algorithms: declare setup/output tables idempotently with `CREATE TABLE IF NOT EXISTS`, use `fallback_compute_region => '{region}'` (not `fallback_region`), and in `ShortestPath` include **every** yielded node variable (`source_node` AND `target_node`) in `RETURN`.
 
 ---
 

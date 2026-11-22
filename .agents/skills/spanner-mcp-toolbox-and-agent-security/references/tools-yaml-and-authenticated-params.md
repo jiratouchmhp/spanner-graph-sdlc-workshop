@@ -6,8 +6,9 @@ Complete configuration reference for authoring hardened **MCP Toolbox for Databa
 
 ## 1. `tools.yaml` Structure: Flat Multi-Document v1 vs Legacy Nested Map
 
+- **Canonical CLI Flag (`v1.13.1+`):** Always pass `--config <file>` (or mutually exclusive `--configs` / `--config-folder`). The legacy `--tools-file` flag is **deprecated** in `v1.13.1` and prints `Flag --tools-file has been deprecated, please use --config instead`.
 - **Flat Multi-Document v1 (Recommended):** Separate each resource with `---` and declare top-level `kind:` (`source`, `tool`, `group`, `toolset`, `authService`, `embeddingModel`, `prompt`, `resource`, `resourceTemplate`), `name:`, and `type:`.
-- **Legacy Nested Map Format:** Top-level maps (`sources:`, `embeddingModels:`, `authServices:`, `tools:`, `toolsets:`) are still accepted, and can be auto-migrated in place (writes a `.bak` backup; non-top-level comments are not preserved):
+- **Legacy Nested Map Format:** Top-level maps (`sources:`, `embeddingModels:`, `authServices:`, `tools:`, `toolsets:`) are still accepted cleanly without warnings in `v1.13.1`, and can be auto-migrated in place (writes a `.bak` backup; non-top-level comments are not preserved):
   ```bash
   toolbox migrate --config tools.yaml --dry-run
   toolbox migrate --config tools.yaml
@@ -73,6 +74,9 @@ dialect: ${SPANNER_DIALECT:googlesql}   # googlesql (default) | postgresql
   - **GoogleSQL:** Named parameters (`@customer_id`, `@status`) mapped by parameter name.
   - **PostgreSQL:** Positional parameters (`$1`, `$2`) mapped strictly in the declaration order listed under `parameters:`.
   - **Array Parameters:** JSON arrays are automatically converted into typed Go slices (`[]string`, `[]int64`, etc.) required by Spanner.
+- **CRITICAL Spanner SQL Query-Shape Gotchas (Live-Verified):**
+  - **No Nullable `ARRAY<STRUCT<...>>` Scalar Subqueries:** Never write `(SELECT ARRAY_AGG(STRUCT(...)) FROM ...)` or `(SELECT some_struct_array FROM empty_cte)` in a `SELECT` projection — if the subquery returns 0 rows, Spanner fails with **`Unimplemented: Unsupported query shape: null-valued array of struct`**. Always use **`ARRAY(SELECT AS STRUCT ... FROM ...)`**, which is guaranteed to return a non-null empty array `[]`.
+  - **Multi-Referenced FTS `SCORE()` CTEs:** When a hybrid search SQL tool references an FTS CTE calling `SCORE()` more than once (e.g., RSF bounds + join), prefix `statement:` with **`@{optimizer_version=latest}`** (optimizer `>= 6`).
 
 ### 2. Vertex AI `embeddingModel` + `embeddedBy` + `valueFromParam` (Enterprise+)
 Automatically converts natural-language query or document strings into vector arrays (`ARRAY<FLOAT32>` / `ARRAY<FLOAT64>`) server-side inside Toolbox—so the LLM never handles raw float arrays.
@@ -159,9 +163,9 @@ parameters:
 ## 4. Parameter Validation & Optional-Parameter Gotchas
 
 - **Supported Types:** `string`, `integer`, `float`, `boolean`, `array` (requires `items:`), `map` (optional `valueType:`).
-- **Validation Guardrails:**
-  - `allowedValues: [...]` — strict allowlist (**supports regex** patterns, e.g., UUID or enum validation).
-  - `excludedValues: [...]` — denylist (**supports regex**).
+- **Validation Guardrails (`v1.13.1` Regex-Anchoring Gotcha!):**
+  - `allowedValues: [...]` — strict allowlist evaluated with **unanchored Go regular expressions** (`regexp.MatchString`). **CRITICAL:** Always anchor literal enum values with `^...$` (e.g., `"^ACTIVE$"`, `"^$"` for optional empty strings, escaping dots like `"^PCI-DSS 4\\.0$"`). Putting bare `""` in `allowedValues` matches **every** string and silently bypasses validation; unanchored `"ACTIVE"` also matches `"ACTIVE_EVIL"`!
+  - `excludedValues: [...]` — denylist (**supports regex**; anchor with `^...$` when excluding exact values).
   - `minValue` / `maxValue` — numeric bounds on `integer` and `float` (always cap `LIMIT` params!).
   - `escape` — `"single-quotes"`, `"double-quotes"`, `"backticks"`, or `"square-brackets"` for strings in `templateParameters` only. **Security rule:** avoid `templateParameters` in production; escaping alone does **not** prevent SQL injection—if dynamic identifiers are unavoidable, enforce strict `allowedValues` allowlists.
 - **CRITICAL Optional-Parameter Trap (`default: null`):**
@@ -178,7 +182,7 @@ Never accept `customer_id`, `tenant_id`, or `caller_email` as a normal LLM-suppl
 
 | Mechanism | How Value Is Supplied | Visible to LLM? | Best Fit | Protocol & Validation Constraints |
 | :--- | :--- | :---: | :--- | :--- |
-| **1. Authenticated Parameters** (`authServices:` on param) | Decoded server-side by Toolbox from cryptographically verified OIDC JWT (`<name>_token` header in Native mode, or `Authorization: Bearer` in MCP Auth mode) | **NO** — stripped from LLM tool schema | **Gold standard for multi-tenant end-user isolation** (`WHERE customer_sub = @sub` or `WHERE email = @caller_email`) | Requires `kind: authService` (`type: google` or `type: generic`). Native mode (`mcpEnabled: false`) requires JWT (opaque tokens unsupported). |
+| **1. Authenticated Parameters** (`authServices:` on param) | Decoded server-side by Toolbox from cryptographically verified OIDC JWT (`<name>_token` header in Native mode, or `Authorization: Bearer` in MCP Auth mode) | **NO** — advertised via `_meta["toolbox/authParam"]` on `/mcp` `tools/list` so `toolbox-core`/ADK strips it from LLM schema | **Gold standard for multi-tenant end-user isolation** (`WHERE customer_sub = @sub` or `WHERE email = @caller_email`) | Requires `kind: authService` (`type: google` or `type: generic`). Native mode (`mcpEnabled: false`) requires JWT (opaque tokens unsupported). Note: legacy `/api/toolset` returns `HTTP 410 Gone` in `v1.13.1+`; always use `/mcp` or `/mcp/{toolset}`. |
 | **2. Secure Parameters** (`secure: true` on param) | Bound out-of-band by host app code (`bind_secure_param` / `secure_params={...}`), sent in JSON-RPC `secureArguments` | **NO** — published in `secureInputSchema` (omitted from `inputSchema`) | Trusted backend runtime context (`tenant_id`, `org_id`) after backend already authenticated caller | Requires **MCP `2026-07-28`** + extension **`com.google.cloud/toolbox.v1`** + SDK `toolbox-core`/`toolbox-adk >= 1.4.0`. Always required; **cannot** combine with `authServices`, `default`, or `required: false`. Prompt-injected collision returns `isError: true`; missing/misplaced returns `-32602`; un-negotiated client returns `-32021`; cross-mixing `bind_param`/`bind_secure_param` raises `ValueError`. |
 | **3. Client `bound_params` & URL Param Binding** | SDK `bound_params={...}` or HTTP query string `?region=asia-southeast3` | **NO** — URL-bound params stripped from `tools/list` | Non-sensitive routing/scoping metadata (`env`, `region`) | **SECURITY WARNING:** **NEVER** pass secrets, passwords, API keys, or auth tokens via URL query binding (leaks into LB/proxy logs and browser history!). |
 
@@ -239,7 +243,7 @@ parameters:
     type: string
     description: Order lifecycle status filter
     default: ACTIVE
-    allowedValues: ["ACTIVE", "PROCESSING", "SHIPPED", "DELIVERED"]
+    allowedValues: ["^ACTIVE$", "^PROCESSING$", "^SHIPPED$", "^DELIVERED$"]
   - name: max_rows
     type: integer
     description: Maximum orders returned
@@ -322,11 +326,14 @@ Do **not** mount one monolithic `tools.yaml` containing both read and write tool
 
 ## 7. `tools.yaml` Anti-Patterns & Public References
 
+- **NEVER** pass deprecated `--tools-file` on `v1.13.1+` (always use `--config`).
+- **NEVER** put bare `""` or unanchored literal enums in `allowedValues` (wrap every literal with `^...$` and empty string with `^$`).
 - **NEVER** put `databaseRole` or `readOnly` on `kind: source` (`type: spanner`).
 - **NEVER** omit `readOnly: true` on `spanner-sql` SELECT/GQL tools (defaults to R/W transaction!).
 - **NEVER** use `default: null` expecting an optional parameter (use `required: false`).
 - **NEVER** use `location: global` or commit a static `apiKey` for production `gemini-embedding-001`.
 - **NEVER** expose `spanner-execute-sql` or unconstrained `templateParameters` to end-user agents.
+- **NEVER** project nullable `ARRAY<STRUCT<...>>` scalar subqueries (`(SELECT ARRAY_AGG(...) FROM ...)`) in `spanner-sql` tools — use `ARRAY(SELECT AS STRUCT ...)` so empty sets serialize as non-null `[]`.
 
 **Public Documentation:**
 - [MCP Toolbox Configuration & Spanner Tools](https://github.com/googleapis/genai-toolbox)

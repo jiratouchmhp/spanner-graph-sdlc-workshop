@@ -45,7 +45,7 @@ Enclosed in `{ ... }`; optionally start with `GRAPH {other_graph}` (otherwise in
 1. `ARRAY { gql_query }` -> `ARRAY<T>` (0 rows -> empty `[]`, never `NULL`).
 2. `EXISTS { gql_query | match_stmt | graph_pattern }` -> `BOOL` (never `NULL`).
 3. `val [ NOT ] IN { gql_query }` -> `BOOL` (single comparable column).
-4. `VALUE { gql_query }` -> scalar `T` (single column; 0 rows -> `NULL`; **> 1 row -> runtime error**).
+4. `VALUE { gql_query }` -> scalar `T` (single column; 0 rows -> `NULL`; **> 1 row -> runtime error**). **Explicit Alias Mandate:** Even inside a single-column scalar `VALUE { ... }` subquery, computed/aggregate expressions **MUST** carry an explicit `AS` alias (e.g., `VALUE { MATCH (inner_n:Account)<-[:Transfers]-(:Account) WHERE inner_n = n RETURN COUNT(*) AS cnt }` — omitting `AS cnt` fails compilation!).
 
 **Subquery Variable Shadowing Prohibition**: You **CANNOT** redeclare an outer graph variable inside `VALUE`/`ARRAY`/`EXISTS`/`IN` subqueries (`redefining graph element variables in a subquery is not allowed`). Bind a fresh variable and correlate via `WHERE inner_n = outer_n` (or use `CALL (outer_n) { ... }`).
 

@@ -20,7 +20,22 @@ This directory contains the authoritative **Acme Commerce Platform** structured 
 4. **Legacy `AT_RISK` Payment Consumer (`svc-billing -> api-payments-charge-v1`)**: `svc-billing` still sends `85` RPS to `DEPRECATED` `POST /v1/payments/charge` (`migration_status = AT_RISK`).
 5. **Hero API Contract (`api-payments-charge-v2`)**: Exactly 2 direct callers (`svc-checkout`, `svc-billing`), 7 deterministic blast-radius services, 5 governing ADRs (`ADR-004`, `ADR-005`, `ADR-006`, `ADR-008`, `ADR-010`), and 5 applicable requirements (`REQ-001`, `REQ-002`, `REQ-003`, `REQ-005`, `REQ-006`).
 
-## Running Local Neo4j CE + APOC Streaming Export (Optional)
+## Zero-Docker Neo4j CE & APOC Streaming Simulator (Default)
+
+Docker Desktop is **100% optional**. Run the pure-stdlib simulator (`no_docker_neo4j_sim.py`) directly from the repository root to explore all `68` nodes, `234` edges, `WALK` vs `TRAIL` cycle explosion, JVM heap OOM trade-offs, and **15/15 SHA-256 APOC parity**:
+
+```bash
+# Full 4-section simulator + Lab 1 parity check (runs in < 2 seconds, zero Docker)
+make lab1-no-docker
+
+# Or invoke the simulator directly with named queries or explicit export staging
+python3 data/structured/no_docker_neo4j_sim.py --demo
+python3 data/structured/no_docker_neo4j_sim.py --list-queries
+python3 data/structured/no_docker_neo4j_sim.py --query walk_vs_trail
+python3 data/structured/no_docker_neo4j_sim.py --export-dir /tmp/acme-apoc-export --diff
+```
+
+## Optional With-Docker: Local Neo4j 5 CE + APOC Streaming Export (Track B)
 
 ```bash
 cd data/structured

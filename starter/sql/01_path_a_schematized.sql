@@ -104,7 +104,7 @@ CREATE TABLE Apis (
   ) STORED HIDDEN,
   metadata_tokens TOKENLIST AS (
     TOKENIZE_JSON(metadata)
-  ) STORED HIDDEN,
+  ) HIDDEN,
   latency_tokens TOKENLIST AS (
     TOKENIZE_NUMBER(latency_budget_ms, comparison_type => 'all', min => 0, max => 60000)
   ) STORED HIDDEN,

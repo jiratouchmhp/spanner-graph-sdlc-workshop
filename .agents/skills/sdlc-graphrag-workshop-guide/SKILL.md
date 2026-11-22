@@ -35,6 +35,7 @@ This skill is the **only** workshop-coupled skill in `.agents/skills/`. It holds
 | **Compute Sizing Floor** | Workshop sandbox: `100` PU (`$1.0332` / 8 hr compute, `~$1.15` total) | Production floor: `>= 1,000` PUs (`>= 1` node) for dedicated zone tasks, Managed Autoscaler, and Remote Functions |
 | **Backup Schedule Default** | Workshop: `--default-backup-schedule-type=NONE` | Production: `AUTOMATIC` + 7-day PITR + `--enable-drop-protection` + Singapore DR backup copy |
 | **Hero Target API** | `api-payments-charge-v2` (`POST /v2/payments/charge`) | Exposed by `svc-payments` (`team-payments`); deterministic **7** impacted services, **5** ADRs, **5** REQs |
+| **Live-Verified Timings** | Bangkok (`asia-southeast3`, 100 PU) + Singapore (`asia-southeast1`) | Create ~2m · Path A <5s · Path B + 152 SG embeddings ~22s · `apply-postload` ~10m (start before break!) · Hero/SQL/GQL 33–520 ms · Data Boost 3 algos ~3m · Lab 6 deploy ~3–4m · SG DR backup ~6–8m |
 
 ### The 9 Workshop Spanner Invariants (`INV-01`–`INV-09`)
 
@@ -54,9 +55,10 @@ This skill is the **only** workshop-coupled skill in `.agents/skills/`. It holds
 | :--- | :--- | :--- |
 | Check Acme entity/edge counts, schema, or topological traps | `WORKSHOP_SPEC.json`, `data/structured/` | [acme-sdlc-domain-and-hero-contract.md](references/acme-sdlc-domain-and-hero-contract.md) |
 | Verify the 7-row Hero API blast radius, 5 ADRs, 5 REQs, citations | `solution/pipelines/hero_blast_radius_offline.py --check-fixture solution/sql/fixtures/07_hero_expected_rows.json` | [acme-sdlc-domain-and-hero-contract.md](references/acme-sdlc-domain-and-hero-contract.md) |
-| Solve or verify a `starter/` `TODO(Lab 1-8)` exercise | `make TRACK=starter verify-lab LAB=<1..8>` | [lab-checkpoints-and-troubleshooting.md](references/lab-checkpoints-and-troubleshooting.md) |
+| Check workstation readiness or run Zero-Docker Lab 1 simulator | `make preflight` and `make lab1-no-docker` (`data/structured/no_docker_neo4j_sim.py`) | [lab-checkpoints-and-troubleshooting.md](references/lab-checkpoints-and-troubleshooting.md) |
+| Solve or verify a `starter/` `TODO(Lab 1-8)` exercise | `make TRACK=starter verify-lab LAB=<1..8>` *(or `MODE=express` for 4h Track A)* | [lab-checkpoints-and-troubleshooting.md](references/lab-checkpoints-and-troubleshooting.md) |
 | Confirm starter stubs fail while reference solution passes | `make verify-starter-stubs` and `make TRACK=solution verify-lab LAB=all` | [lab-checkpoints-and-troubleshooting.md](references/lab-checkpoints-and-troubleshooting.md) |
-| Run full 7-module offline test suite and skill validation | `make test` and `make validate-skills` | [lab-checkpoints-and-troubleshooting.md](references/lab-checkpoints-and-troubleshooting.md) |
+| Run full 8-module offline test suite and skill validation | `make test` and `make validate-skills` | [lab-checkpoints-and-troubleshooting.md](references/lab-checkpoints-and-troubleshooting.md) |
 | Test Lab 6 MCP persona RBAC & prompt-injection fail-closed | `make demo-mcp-mock` (`solution/mcp/adk_multi_agent_demo.py --mock`) | [acme-sdlc-domain-and-hero-contract.md](references/acme-sdlc-domain-and-hero-contract.md) |
 | Model Bangkok/Singapore sizing, CUDs, HDD tiering & 3-store TCO | `make sizing PRESET=all REGION=asia-southeast3` or `WORKSHEET=starter/tools/customer_scale_worksheet.json` | [acme-sdlc-domain-and-hero-contract.md](references/acme-sdlc-domain-and-hero-contract.md) |
 | Debug workshop SQL, GQL, ScaNN, MCP IAM, or teardown errors | Check symptom → root cause → exact fix | [lab-checkpoints-and-troubleshooting.md](references/lab-checkpoints-and-troubleshooting.md) |
@@ -67,17 +69,19 @@ This skill is the **only** workshop-coupled skill in `.agents/skills/`. It holds
 ### 1. Offline Lab Verification Loop (`starter/` → `solution/`)
 
 ```bash
-# Inspect all available Makefile targets
+# Inspect all 16 Makefile targets and run fast 5-second Zero-Docker preflight
 make help
+make preflight
+make lab1-no-docker
 
 # 1. Confirm all 15 starter stubs across Labs 1-8 are properly armed
 make verify-starter-stubs
 
 # 2. After completing TODO(Lab N) inside starter/, verify that specific lab
-make TRACK=starter verify-lab LAB=1
-make TRACK=starter verify-lab LAB=5
+make TRACK=starter verify-lab LAB=1                  # Full Track B (default MODE=full)
+make TRACK=starter MODE=express verify-lab LAB=1     # Express Track A (core subset)
 
-# 3. Verify the complete reference implementation and all 7 offline test suites
+# 3. Verify the complete reference implementation and all 8 offline test suites
 make TRACK=solution verify-lab LAB=all
 make test
 make validate-skills
@@ -105,8 +109,10 @@ make sizing WORKSHEET=starter/tools/customer_scale_worksheet.json REGION=asia-so
 ### 3. Live Bangkok GCP Sandbox Lifecycle (Confirm with User First!)
 
 ```bash
-# 0. Confirm project and region before mutating live GCP resources
+# 0. Confirm project/region and clean ADC quota-project before live commands
 gcloud config get-value project
+gcloud auth application-default set-quota-project "$GOOGLE_CLOUD_PROJECT"
+export SPANNER_DISABLE_BUILTIN_METRICS=true   # Optional: silences noisy OpenTelemetry metrics logs
 
 # 1. Provision Bangkok 100-PU Enterprise sandbox (--default-backup-schedule-type=NONE)
 make provision-gcp
@@ -115,27 +121,28 @@ make provision-gcp
 python3 labs/run_hero_query.py --query B --api-id api-payments-charge-v2
 
 # 3. Verify live Spanner smoke checks and FGAC role enforcement
-bash scripts/verify_live_gcp.sh
+make verify-live
 
 # 4. Optional Singapore DR backup copy, then clean teardown
 bash scripts/provision_workshop_env.sh backup-to-singapore
-make cleanup-gcp
+make cleanup-gcp          # Spanner instances & backups only
+make cleanup-all-gcp      # Full teardown (MCP/IAM/DLP/GCS/Spanner) + zero-residual audit
 ```
 
 ## Workshop Repository Quick Map
 
 - **Source of Truth & Plans**: `WORKSHOP_SPEC.json`, `WORKSHOP_CONTENT_PLAN.md`, `README.md`, `GEMINI.md`, `Makefile`, `.env.example`.
-- **Shared Corpus (`data/`)**: `data/structured/` (Neo4j CE Docker + APOC Cypher + `stage_apoc_export.py` + 5 node CSVs + 10 edge CSVs + `all_nodes.jsonl` + `all_edges.jsonl`) and `data/unstructured/` (45 Markdown SDLC docs).
+- **Shared Corpus (`data/`)**: `data/structured/` (Zero-Docker simulator `no_docker_neo4j_sim.py`, optional Neo4j CE Docker + APOC Cypher + `stage_apoc_export.py` + 5 node CSVs + 10 edge CSVs + JSONLs) and `data/unstructured/` (45 Markdown SDLC docs).
 - **Hands-On Workspace (`starter/`)**: `starter/README.md` + 15 exercise files with `TODO(Lab 1-8)` markers across `starter/sql/` (10), `starter/pipelines/` (2), `starter/mcp/` (2), and `starter/tools/customer_scale_worksheet.json` (1).
 - **Reference Implementation (`solution/`)**: `solution/sql/` (`01`–`11`, `03a`–`03d`, `04b`, `fixtures/`), `solution/pipelines/` (5 scripts), `solution/mcp/` (`tools.yaml`, 3 rendered `personas/*.yaml`, IAM/Model Armor script, ADK demo), `solution/tools/sizing_calculator.py`.
-- **Guides, Scripts & Tests**: `docs/00_facilitator_guide.md` through `docs/08_observability_and_troubleshooting.md`, `labs/run_hero_query.py`, `scripts/{provision_workshop_env.sh,setup_antigravity_skills.sh,verify_live_gcp.sh,verify_lab.py}`, `tests/` (7 stdlib unittest modules), `.antigravity/mcp_config.json`.
+- **Guides, Scripts & Tests**: `docs/00_facilitator_guide.md` through `docs/08_observability_and_troubleshooting.md`, `labs/run_hero_query.py`, `scripts/{preflight_check.sh,provision_workshop_env.sh,run_live_sql.py,setup_antigravity_skills.sh,verify_lab.py,verify_live_gcp.sh,verify_zero_residual.sh}`, `tests/` (8 stdlib unittest modules), `.antigravity/mcp_config.json`.
 
 ## Reference Deep-Dives
 
 Read the self-contained reference matching your immediate workshop task:
 
 - **[Acme SDLC Domain & Hero Contract](references/acme-sdlc-domain-and-hero-contract.md)**: Complete 68-node / 174-explicit / 60-dual-projected dataset catalog, locked 28-edge dependency graph & 5 topological test traps, exact 7-row Hero `api-payments-charge-v2` blast-radius contract (5 ADRs, 5 REQs, 9 verifiable Markdown citations), three property graph designs (`SdlcGraph`, `SdlcDynamicGraph`, `SdlcAlgoGraph`), dual-layer MCP Toolbox vs FGAC persona RBAC matrix, and verified 2026 Bangkok/Singapore pricing & TCO presets.
-- **[Lab Checkpoints & Troubleshooting](references/lab-checkpoints-and-troubleshooting.md)**: Track A (4-hour) vs Track B (8-hour) delivery matrix, all 15 `starter/` → `solution/` `TODO(Lab 1-8)` checkpoints with exact `scripts/verify_lab.py` assertions, `Makefile` & 7-module `tests/` catalog, live Bangkok/Singapore GCP lifecycle sequence, and a 15-item symptom → root-cause → fix troubleshooting runbook.
+- **[Lab Checkpoints & Troubleshooting](references/lab-checkpoints-and-troubleshooting.md)**: Track A (4-hour) vs Track B (8-hour) delivery matrix, all 15 `starter/` → `solution/` `TODO(Lab 1-8)` checkpoints with exact `scripts/verify_lab.py` assertions, `Makefile` & 8-module `tests/` catalog, live Bangkok/Singapore execution timings, and a 25-item symptom → root-cause → fix troubleshooting runbook covering all live-verified findings.
 
 ## Routing to the 7 Production Cloud Spanner Skills
 

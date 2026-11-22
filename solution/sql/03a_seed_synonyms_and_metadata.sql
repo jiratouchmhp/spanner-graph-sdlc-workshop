@@ -29,7 +29,7 @@ INSERT OR UPDATE INTO SdlcSynonymDict (Key, Value) VALUES
 -- 2. Enrich Key Apis.metadata JSON Documents (Indexed by TOKENIZE_JSON)
 -- -----------------------------------------------------------------------------
 UPDATE Apis
-SET metadata = JSON '{
+SET metadata = JSON '''{
   "pci_scope": true,
   "sox_controlled": true,
   "data_residency": "asia-southeast3",
@@ -40,11 +40,11 @@ SET metadata = JSON '{
   "freeze_window_days": 180,
   "auth_protocol": "mtls_oidc",
   "compliance_frameworks": ["PCI-DSS 4.0", "SOX", "ZERO_TRUST"]
-}'
+}'''
 WHERE api_id = 'api-payments-charge-v2';
 
 UPDATE Apis
-SET metadata = JSON '{
+SET metadata = JSON '''{
   "pci_scope": true,
   "sox_controlled": true,
   "data_residency": "asia-southeast3",
@@ -54,11 +54,11 @@ SET metadata = JSON '{
   "replacement_api_id": "api-payments-charge-v2",
   "auth_protocol": "mtls_oidc",
   "compliance_frameworks": ["PCI-DSS 4.0", "COMPLIANCE_LEGACY"]
-}'
+}'''
 WHERE api_id = 'api-payments-charge-v1';
 
 UPDATE Apis
-SET metadata = JSON '{
+SET metadata = JSON '''{
   "pci_scope": false,
   "sox_controlled": false,
   "data_residency": "asia-southeast3",
@@ -67,11 +67,11 @@ SET metadata = JSON '{
   "is_high_fanin_hub": true,
   "expected_caller_count": 10,
   "compliance_frameworks": ["ZERO_TRUST", "THAILAND_PDPA"]
-}'
+}'''
 WHERE api_id = 'api-auth-token-v2';
 
 UPDATE Apis
-SET metadata = JSON '{
+SET metadata = JSON '''{
   "pci_scope": true,
   "sox_controlled": false,
   "data_residency": "asia-southeast3",
@@ -80,11 +80,11 @@ SET metadata = JSON '{
   "fraud_fail_closed_threshold_usd": 500,
   "auth_protocol": "mtls_oidc",
   "compliance_frameworks": ["RISK_POLICY", "PCI-DSS 4.0", "SLA"]
-}'
+}'''
 WHERE api_id = 'api-fraud-score-v1';
 
 UPDATE Apis
-SET metadata = JSON '{
+SET metadata = JSON '''{
   "pci_scope": false,
   "sox_controlled": true,
   "data_residency": "asia-southeast3",
@@ -93,11 +93,11 @@ SET metadata = JSON '{
   "dr_backup_region": "asia-southeast1",
   "auth_protocol": "mtls_oidc",
   "compliance_frameworks": ["SOX", "DR_RPO_RTO", "THAILAND_PDPA"]
-}'
+}'''
 WHERE api_id = 'api-ledger-post-v2';
 
 UPDATE Apis
-SET metadata = JSON '{
+SET metadata = JSON '''{
   "pci_scope": true,
   "sox_controlled": false,
   "data_residency": "asia-southeast3",
@@ -105,11 +105,11 @@ SET metadata = JSON '{
   "requires_idempotency_key": true,
   "auth_protocol": "mtls_oidc",
   "compliance_frameworks": ["RESILIENCE", "ZERO_TRUST"]
-}'
+}'''
 WHERE api_id = 'api-checkout-submit-v1';
 
 UPDATE Apis
-SET metadata = JSON '{
+SET metadata = JSON '''{
   "pci_scope": false,
   "sox_controlled": false,
   "data_residency": "asia-southeast3",
@@ -117,5 +117,5 @@ SET metadata = JSON '{
   "has_bidirectional_notification_cycle": true,
   "auth_protocol": "mtls_oidc",
   "compliance_frameworks": ["RESILIENCE", "OBSERVABILITY"]
-}'
+}'''
 WHERE api_id = 'api-orders-create-v2';

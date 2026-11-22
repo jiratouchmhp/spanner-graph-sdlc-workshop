@@ -1,7 +1,7 @@
 -- =============================================================================
 -- 06_hybrid_rrf_rsf_filtered.sql (STARTER — Lab 5)
 -- Acme Commerce Platform — Lab 5 Hybrid Retrieval Patterns
---   1. Server-Side Reciprocal Rank Fusion (RRF, k = 60) [TODO(Lab 5)]
+--   1. Server-Side Reciprocal Rank Fusion (RRF, k = 60) [Lab 5 Exercise]
 --   2. Relative Score Fusion (RSF) with NULLIF(max_s - min_s, 0.0) guard [PROVIDED]
 --   3. Filtered Search (FTS lexical pre-filter -> Exact KNN semantic re-rank) [PROVIDED]
 --   4. Two-Stage Retrieval + Optional ML.PREDICT Cross-Encoder Reranker [PROVIDED]
@@ -85,7 +85,10 @@ SELECT 'TODO(Lab 5): replace this stub with fused_rrf + DocumentChunks join' AS 
 -- =============================================================================
 -- Query 2: Relative Score Fusion (RSF) with NULLIF Divide-by-Zero Guard
 --   PROVIDED COMPLETE — weighted min-max normalization (0.60 semantic + 0.40 FTS).
+--   Note: @{optimizer_version=latest} ensures Spanner uses optimizer >= 6 for
+--   SCORE() inside a CTE referenced by both FULL OUTER JOIN and bounds CTEs.
 -- =============================================================================
+@{optimizer_version=latest}
 WITH
   ann_raw AS (
     SELECT

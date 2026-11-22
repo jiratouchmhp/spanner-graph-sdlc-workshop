@@ -5,7 +5,7 @@ Antigravity Skills for Lab 3:
   - Primary: .agents/skills/spanner-schema-and-data-modeling/SKILL.md
   - Support: .agents/skills/spanner-migration-and-neo4j-playbook/SKILL.md
 
-Your Task (`TODO(Lab 3)`):
+Lab 3 Exercise:
   Implement `load_graph()` below so Path A loads in strict referential-integrity
   order:
     Stage 1 (Nodes — 68 rows across 5 tables):
@@ -400,10 +400,41 @@ def load_graph(
         4. When `dry_run=False`, lazily import `google.cloud.spanner`, commit
            all Stage 1 node batches with `database.batch().insert_or_update(...)`,
            and ONLY THEN commit all Stage 2 edge batches.
-        5. Return a summary dict with `status`, `mode`, `spanner_target`,
-           `load_order`, `mutation_guardrails`, `counts` (including 60 folded
-           dual-projected edges via `_count_dual_projected_edges`),
-           `stage_1_nodes`, and `stage_2_edges` (matching `solution/pipelines/neo4j_to_spanner_loader.py`).
+        5. Return a summary dict with the exact keys expected by `main()`:
+           ```python
+           {
+               "status": "DRY_RUN_OK" if dry_run else "LOADED_OK",
+               "mode": "dry-run" if dry_run else "live",
+               "spanner_target": {
+                   "project": project or "demo-project",
+                   "region": region,
+                   "instance_config": f"regional-{region}",
+                   "instance": instance_id,
+                   "database": database_id,
+                   "dialect": "GOOGLE_STANDARD_SQL",
+               },
+               "load_order": {
+                   "stage_1_nodes": [item["table"] for item in stage1_plan],
+                   "stage_2_explicit_edges": [item["table"] for item in stage2_plan],
+               },
+               "mutation_guardrails": {
+                   "spanner_hard_limit": MAX_MUTATIONS_PER_COMMIT,
+                   "requested_batch_size": batch_size,
+                   "max_mutations_per_commit_observed": max_obs,
+                   "within_limit": max_obs < MAX_MUTATIONS_PER_COMMIT,
+               },
+               "counts": {
+                   "total_nodes": total_nodes,
+                   "explicit_edges": total_explicit_edges,
+                   "dual_projected_edges_folded_on_nodes": _count_dual_projected_edges(data_dir),
+                   "total_logical_graph_edges": total_explicit_edges + dual_projected,
+                   "total_planned_commits": total_planned_commits,
+                   "commits_executed": commits_executed,
+               },
+               "stage_1_nodes": stage1_plan,
+               "stage_2_edges": stage2_plan,
+           }
+           ```
     """
     raise NotImplementedError("TODO(Lab 3): implement nodes-before-edges batched mutations")
 

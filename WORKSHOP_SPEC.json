@@ -1252,15 +1252,20 @@
   },
   "makefile_targets": [
     "help",
+    "preflight",
     "install",
+    "install-mcp",
     "test",
     "validate-skills",
     "verify-starter-stubs",
     "verify-lab",
+    "lab1-no-docker",
     "sizing",
     "dry-run-pipelines",
     "demo-mcp-mock",
     "provision-gcp",
-    "cleanup-gcp"
+    "verify-live",
+    "cleanup-gcp",
+    "cleanup-all-gcp"
   ]
 }

@@ -164,7 +164,7 @@ ORDER BY service_id ASC;
 -- =============================================================================
 -- Translation 8: size(pattern) & EXISTS -> VALUE { MATCH ... } Subquery
 --   Trap: openCypher `size((s)<-[:DEPENDS_ON]-())` is unsupported. Rewrite as
---   `VALUE { MATCH (inner_s:Service)<-[:DEPENDS_ON]-(:Service) WHERE inner_s = s RETURN COUNT(*) }`.
+--   `VALUE { MATCH (inner_s:Service)<-[:DEPENDS_ON]-(:Service) WHERE inner_s = s RETURN COUNT(*) AS cnt }`.
 --   CRITICAL: Never redeclare outer variable `s` inside a GQL subquery — bind a
 --   fresh inner variable (`inner_s`) and correlate with `WHERE inner_s = s`!
 --
@@ -180,7 +180,7 @@ MATCH (s:Service)
 LET in_degree = VALUE {
   MATCH (inner_s:Service)<-[:DEPENDS_ON]-(:Service)
   WHERE inner_s = s
-  RETURN COUNT(*)
+  RETURN COUNT(*) AS cnt
 }
 LET uses_auth_hub = EXISTS {
   MATCH (inner_s:Service)-[:CALLS_API]->(:Api {api_id: 'api-auth-token-v2'})

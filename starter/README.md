@@ -9,9 +9,21 @@ Work **exclusively inside `starter/`** using **Antigravity IDE** and the **8 bun
 - **Single Source of Truth**: [../WORKSHOP_SPEC.json](../WORKSHOP_SPEC.json)
 - **Always-On Antigravity Guardrails**: [../.agents/rules/spanner-graph-workshop.md](../.agents/rules/spanner-graph-workshop.md)
 
+> **Zero-Docker vs. With-Docker:** No Docker Desktop needed! Start with `make preflight` and `make lab1-no-docker` — every offline simulator, verifier, pipeline `--dry-run`, and `--mock` security suite runs on pure Python 3.10+ standard library. Optional Docker Compose (`data/structured/docker-compose.yml`) is available only if you want a live local Neo4j 5 CE container in Track B.
+
 ---
 
-## 1. Quickstart (5 Minutes)
+## 1. Quickstart (5 Minutes — Zero-Docker Ready)
+
+### Step 0: Run Preflight & Zero-Docker Lab 1 Simulator
+
+```bash
+# 1. Fast 5-second attendee readiness check (Python, regional defaults, Zero-Docker confirmation)
+make preflight
+
+# 2. Run Lab 1 Zero-Docker Neo4j CE & APOC simulator (WALK vs TRAIL + 15/15 SHA-256 APOC parity)
+make lab1-no-docker
+```
 
 ### Step 1: Confirm Your Starter Stubs Are Armed (Offline, Zero GCP Required)
 
@@ -23,23 +35,24 @@ Every `starter/` exercise intentionally fails its lab verification check until y
 make verify-starter-stubs
 ```
 
-### Step 2: Check Your Target Delivery Track
+### Step 2: Check Your Target Delivery Track (`MODE=express` vs. `MODE=full`)
 
-| Track | Duration | Recommended Scope Inside `starter/` |
-| :--- | :---: | :--- |
-| **Track A — 4-Hour Express** | 240 min | Labs 1–8 core exercises: `09` (first 3 queries), `10` (Tier 1–3), `01` & `03`, `05`, `06` & `07`, `04` + `tools.yaml` + `adk_multi_agent_demo.py`, `customer_scale_worksheet.json`, `11`. |
-| **Track B — 1-Day Deep-Dive** | 480 min | Complete **all 15 `starter/` files** (including both Python loaders in Lab 3, Data Boost `PageRank` in Lab 4, full Tier 4 SHA-256 parity in Lab 2, and live Bangkok GCP execution). |
+| Track | Duration | `verify-lab` Mode | Recommended Scope Inside `starter/` |
+| :--- | :---: | :---: | :--- |
+| **Track A — 4-Hour Express** | 240 min | `MODE=express` | Labs 1–8 core exercises: `09` (Exercises 1–3), `10` (Tiers 1–3), `01` & `03` (skip 2 Python loaders), `05` (skip `08` Data Boost), plus full Labs 5–8 (`06`, `07`, `04`, `tools.yaml`, `adk_multi_agent_demo.py`, `customer_scale_worksheet.json`, `11`). |
+| **Track B — 1-Day Deep-Dive** | 480 min | `MODE=full` *(default)* | Complete **all 15 `starter/` files** (including both Python loaders in Lab 3, Data Boost `PageRank` in Lab 4, full Tier 4 SHA-256 parity in Lab 2, and live Bangkok GCP execution). |
 
 ### Step 3: Solve Lab `N` → Verify Offline → Compare with `solution/`
 
 ```bash
-# Verify your starter/ progress on any single lab (replace N with 1..8)
+# Track B (Full 15-file contract, default MODE=full): verify any single lab (replace N with 1..8)
 make TRACK=starter verify-lab LAB=1
 
-# Short-form syntax (note: verify-lab defaults to TRACK=solution; pass TRACK=starter for your edits)
-make verify-lab TRACK=starter LAB=3
+# Track A (4-Hour Express): verify Track A subset cleanly without hitting Track B-only checks
+make TRACK=starter MODE=express verify-lab LAB=1
+make TRACK=starter MODE=express verify-lab LAB=all
 
-# Verify all 8 labs once completed
+# Verify all 8 labs once full Track B is completed
 make TRACK=starter verify-lab LAB=all
 
 # Compare against the verified reference implementation at any time
@@ -74,8 +87,8 @@ Check off each file as you complete its `TODO(Lab N)` exercises and pass `make T
 | [ ] | **5** | [sql/06_hybrid_rrf_rsf_filtered.sql](sql/06_hybrid_rrf_rsf_filtered.sql) | Implement server-side RRF (`k=60`) with `UNNEST(ARRAY(...)) WITH OFFSET` (NEVER `ROW_NUMBER()`) fusing ScaNN ANN and FTS ranks. | [06_hybrid_rrf_rsf_filtered.sql](../solution/sql/06_hybrid_rrf_rsf_filtered.sql) | `make TRACK=starter verify-lab LAB=5` |
 | [ ] | **5** | [sql/07_hero_api_blast_radius_graphrag.sql](sql/07_hero_api_blast_radius_graphrag.sql) | Complete the Hero API (`api-payments-charge-v2`) GraphRAG query: CTE-isolated ScaNN ANN + RRF + `MATCH TRAIL` + `DATA_FEED_CONSUMER` separation + 5 ADRs / 5 REQs / citations + legacy v1 `AT_RISK` flag. | [07_hero_api_blast_radius_graphrag.sql](../solution/sql/07_hero_api_blast_radius_graphrag.sql) | `make TRACK=starter verify-lab LAB=5` |
 | [ ] | **6** | [sql/04_fgac_roles_views.sql](sql/04_fgac_roles_views.sql) | Create `PublicApiCatalogView` (`SQL SECURITY INVOKER` + explicit `CAST`) and least-privilege `GRANT SELECT` statements for `sdlc_readonly_role` (column-restricted `Owners`). | [04_fgac_roles_views.sql](../solution/sql/04_fgac_roles_views.sql) | `make TRACK=starter verify-lab LAB=6` |
-| [ ] | **6** | [mcp/tools.yaml](mcp/tools.yaml) | Configure secretless Vertex AI `embeddingModels` (`gemini-embedding-001` in `asia-southeast1`), OIDC `authServices` (`@caller_email`), 5 remaining curated `spanner-sql` tools, and 3 isolated persona `toolsets`. | [tools.yaml](../solution/mcp/tools.yaml) | `make TRACK=starter verify-lab LAB=6` |
-| [ ] | **6** | [mcp/adk_multi_agent_demo.py](mcp/adk_multi_agent_demo.py) | Implement `run_persona_query()` to enforce sliced persona YAML allowlists and OIDC fail-closed binding against prompt injection (`--mock`). | [adk_multi_agent_demo.py](../solution/mcp/adk_multi_agent_demo.py) | `make TRACK=starter verify-lab LAB=6` |
+| [ ] | **6** | [mcp/tools.yaml](mcp/tools.yaml) | Configure secretless Vertex AI `embeddingModels` (`gemini-embedding-001` in `asia-southeast1`), OIDC `authServices` (`@caller_email`), security controls (`readOnly`, `valueFromParam`/`embeddedBy`, anchored `allowedValues`) on the 5 pre-scaffolded curated `spanner-sql` tools, and 3 isolated persona `toolsets`. | [tools.yaml](../solution/mcp/tools.yaml) | `make TRACK=starter verify-lab LAB=6` |
+| [ ] | **6** | [mcp/adk_multi_agent_demo.py](mcp/adk_multi_agent_demo.py) | Implement `run_persona_query()` using `load_persona_config()` to slice your own `starter/mcp/tools.yaml` allowlists and enforce OIDC fail-closed binding against prompt injection (`--mock`). | [adk_multi_agent_demo.py](../solution/mcp/adk_multi_agent_demo.py) | `make TRACK=starter verify-lab LAB=6` |
 | [ ] | **7** | [tools/customer_scale_worksheet.json](tools/customer_scale_worksheet.json) | Plug in your real enterprise scale (`nodes`, `edges`, `chunks`, `qps`, `cold_hdd_pct`, Bangkok primary + Singapore DR), run `sizing_calculator.py --worksheet`, then set `todo_status` to `"COMPLETED"`. | [sizing_calculator.py](../solution/tools/sizing_calculator.py) | `make TRACK=starter verify-lab LAB=7` |
 | [ ] | **8** | [sql/11_observability_and_studio_viz.sql](sql/11_observability_and_studio_viz.sql) | Author Spanner Studio `RETURN SAFE_TO_JSON(p)` path visualization + `SPANNER_SYS` Query, Lock (microseconds `/ 1000000.0`), and Split-Point introspection queries. | [11_observability_and_studio_viz.sql](../solution/sql/11_observability_and_studio_viz.sql) | `make TRACK=starter verify-lab LAB=8` |
 
@@ -198,18 +211,27 @@ Keep these 7 rules top of mind while editing `starter/` (full list in [../GEMINI
 
 ---
 
-## 5. Useful Workshop Commands Reference
+## 5. Useful Workshop Commands Reference (All 16 `Makefile` Targets)
 
 ```bash
-make help                                       # List all Makefile targets
-make verify-starter-stubs                       # Confirm starter/ stubs fail until solved
-make TRACK=starter verify-lab LAB=<1..8|all>    # Verify your starter/ work offline
-make TRACK=solution verify-lab LAB=all          # Verify the reference solution/
-make test                                       # Run all 7 offline unittest suites
-make validate-skills                            # Audit all 8 .agents/skills/ packages
-make dry-run-pipelines                          # Offline dry-run of reference Path A & B loaders
-make demo-mcp-mock                              # Offline prompt-injection fail-closed demo
-make sizing PRESET=all REGION=asia-southeast3   # Bangkok Enterprise 2026 sizing & 3-store TCO
+make help                                             # List all 16 Makefile targets & variables
+make preflight                                        # Fast 5-second attendee readiness check (STRICT_GCP=1 for live)
+make lab1-no-docker                                   # Zero-Docker Lab 1 Neo4j CE & APOC simulator + parity check
+make install                                          # Create PEP-668-safe .venv & install core pipeline SDKs
+make install-mcp                                      # Optional Lab 6 live ADK/MCP & Model Armor packages
+make verify-starter-stubs                             # Confirm starter/ stubs fail until solved
+make TRACK=starter verify-lab LAB=<1..8|all>          # Verify your starter/ work offline (default MODE=full)
+make TRACK=starter MODE=express verify-lab LAB=1      # Verify Track A (4-Hour Express) core subset
+make TRACK=solution verify-lab LAB=all                # Verify the reference solution/
+make test                                             # Run all 8 offline stdlib unittest suites
+make validate-skills                                  # Audit all 8 .agents/skills/ packages
+make dry-run-pipelines                                # Offline dry-run of reference Path A & B loaders
+make demo-mcp-mock                                    # Offline prompt-injection fail-closed demo
+make sizing PRESET=all REGION=asia-southeast3         # Bangkok Enterprise 2026 sizing & 3-store TCO
+make provision-gcp                                    # [LIVE GCP] Provision Bangkok 100-PU Enterprise sandbox
+make verify-live                                      # [LIVE GCP] Run 5-check live Cloud Spanner verification
+make cleanup-gcp                                      # [LIVE GCP] Delete Spanner instances & backups only
+make cleanup-all-gcp                                  # [LIVE GCP] Full teardown (MCP/IAM/DLP/GCS/Spanner) + zero-residual audit
 ```
 
 > **Resetting Your Starter Workspace:** If you want to practice a lab again from scratch, restore any file cleanly with `git checkout -- starter/` (if initialized as a Git repo) or compare side-by-side against `solution/`.

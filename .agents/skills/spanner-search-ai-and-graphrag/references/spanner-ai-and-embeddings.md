@@ -78,6 +78,12 @@ endpoint.
    locks and inflate contention). Compute embeddings in a **read-only
    transaction** and write results in a separate read-write transaction, or use
    throttled **Partitioned DML** for bulk backfills.
+5. **Explicit `outputDimensionality` for `gemini-embedding-001`:** Calling
+   `ML.PREDICT(MODEL {model}, ...)` against `gemini-embedding-001` **defaults to
+   `3072` dimensions** unless you pass **`STRUCT(768 AS outputDimensionality)`**
+   (matching your `vector_length=>N`) as the **3rd `params` argument**. Omitting
+   the 3rd argument causes dimension-mismatch failures on `768`-dim columns and
+   distance functions.
 
 ## 3. `CREATE MODEL`, `ALTER MODEL`, `DROP MODEL` (GoogleSQL Only)
 

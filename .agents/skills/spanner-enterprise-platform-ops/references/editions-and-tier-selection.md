@@ -122,7 +122,7 @@ gcloud spanner instances create "{instance_id}" \
   --project="{project_id}" \
   --instance-type=free-instance \
   --config="regional-asia-southeast3" \
-  --description="Cloud Spanner 90-Day Free Trial"
+  --description="Spanner 90-Day Free Trial"
 ```
 
 - **Hard Quotas**: **90-day duration**, **10 GB** storage cap, **~500 read QPS / ~100 write QPS** (1 KB rows), max **5 databases per instance**, **regional configurations only**.

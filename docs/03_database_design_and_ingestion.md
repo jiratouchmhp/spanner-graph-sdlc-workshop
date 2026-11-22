@@ -30,7 +30,7 @@ Instead of creating 4 extra junction tables for `EXPOSES`, `OWNS_SERVICE`, `OWNS
 - **Pattern-1 Citation Views:** `ChunkCitesApiView`, `ChunkCitesServiceView`, `ChunkCitesAdrView`, and `ChunkCitesReqView` declare explicit `SQL SECURITY INVOKER` and project the single-table primary key `(chunk_id, entity_type, entity_id)` with explicit `KEY (...)` clauses in `SdlcGraph`.
 - **Vector Embeddings (`INV-08`):** `DocumentChunks.embedding` uses `ARRAY<FLOAT32>(vector_length=>768)` (`3.0 KiB/vector` — half the footprint of `FLOAT64` and required for optimal ScaNN memory efficiency).
 - **Tiered Storage & TTL:** `CREATE LOCALITY GROUP sdlc_cold_archive OPTIONS (storage = 'ssd', ssd_to_hdd_spill_timespan = '30d')` applies **only** to the cold `AgentQueryAudit.raw_payload` JSON column (keeping row-existence metadata and PK checks on SSD!), paired with `ROW DELETION POLICY (OLDER_THAN(created_at, INTERVAL 90 DAY))` — delivering **5x storage savings** (`$0.315` → `$0.063/GiB-mo` in Bangkok).
-- **Custom FTS Dictionary:** `SdlcSynonymDict` uses the exact required 2-column schema (`Key STRING(MAX)`, `Value ARRAY<STRING(MAX)>`) with `fulltext_dictionary_table = true, fulltext_dictionary_staleness = '15s'`.
+- **Custom FTS Dictionary & Virtual `TOKENIZE_JSON`:** `SdlcSynonymDict` uses the exact required 2-column schema (`Key STRING(MAX)`, `Value ARRAY<STRING(MAX)>`) with `fulltext_dictionary_table = true, fulltext_dictionary_staleness = '15s'`. **Live DDL Gotcha:** `Apis.metadata_tokens` (`TOKENIZE_JSON(metadata)`) **must** be declared virtual `HIDDEN` (never `STORED HIDDEN` — Cloud Spanner rejects `JSON derived TOKENLIST column ... may not be STORED`), and multi-line JSON DML literals in `03a_seed_synonyms_and_metadata.sql` must use triple quotes (`JSON '''{ ... }'''`).
 
 ---
 
@@ -64,10 +64,10 @@ Step 4: Post-Load Orchestrator (`apply_postload.py`):
         Stage 4: ANALYZE DDL LRO (refreshes Query Optimizer statistics)
 ```
 
-### Key Post-Load Index Patterns (`03_indexes_fts_vector_postload.sql`)
-- **Remote Reverse Covering Indexes:** `CREATE INDEX IdxApiCalledByService ON ServiceCallsApi (api_id, service_id) STORING (call_mode, is_critical, migration_status, rps_estimate), INTERLEAVE IN Apis;` — notice `INTERLEAVE IN Apis` (without `PARENT`) co-locates incoming `CALLS_API` edges directly on the destination `Api` split! Never repeat PK columns inside `STORING`.
+### Key Post-Load Index Patterns (`03_indexes_fts_vector_postload.sql`) & Live Bangkok Timings
+- **Remote Reverse Covering Indexes (Verified Live):** `CREATE INDEX IdxApiCalledByService ON ServiceCallsApi (api_id, service_id) STORING (call_mode, is_critical, migration_status, rps_estimate), INTERLEAVE IN Apis;` — non-parent `INTERLEAVE IN Apis` (without `PARENT`) co-locates incoming `CALLS_API` edges directly on the destination `Api` split! Never repeat PK columns inside `STORING`.
 - **Multi-Modal Search Indexes:** `CREATE SEARCH INDEX IdxApisSearch ON Apis (search_tokens, path_ngrams, path_lower_ngrams, metadata_tokens, latency_tokens) STORING (...)` — all `TOKENLIST` columns queried together must reside in the same search index.
-- **ScaNN Vector Index (`INV-08`):**
+- **ScaNN Vector Index (`INV-08`) & `ML.PREDICT` Matryoshka Sizing:**
   ```sql
   CREATE VECTOR INDEX IdxDocumentChunksEmbedding
     ON DocumentChunks (embedding)
@@ -75,7 +75,8 @@ Step 4: Post-Load Orchestrator (`apply_postload.py`):
     WHERE embedding IS NOT NULL
     OPTIONS (distance_type = 'COSINE');
   ```
-  Omit manual `tree_depth`/`num_leaves` so Cloud Spanner Enterprise auto-tunes ScaNN partitions, and keep `STORING` compact (never store huge `content` blobs inside the vector index).
+  Omit manual `tree_depth`/`num_leaves` so Cloud Spanner Enterprise auto-tunes ScaNN partitions, and keep `STORING` compact (never store huge `content` blobs inside the vector index). In `03d_backfill_embeddings_pdml.sql`, always pass `STRUCT(768 AS outputDimensionality)` as the 3rd argument to `SAFE.ML.PREDICT` (otherwise `gemini-embedding-001` defaults to `3072` dimensions).
+- **Live-Verified Bangkok (`100` PU) Timings:** Base DDL create **~2 min**, Path A + `SdlcDynamicGraph` load **<5s** (`domain_key = node_id`, no label prefix, so Hero Query C matches `@api_id`), Path B + 152 Singapore Vertex AI embeddings **~22s**, and 4-stage `apply-postload` (20 indexes + 5 FTS + ScaNN + `ANALYZE`) **~10 min** (*tip: kick off `apply-postload` right before the morning break, or temporarily use `300` PU during live demos*).
 
 ### Running Pipelines Offline (`--dry-run`) and Live (Bangkok + Singapore)
 
@@ -116,7 +117,11 @@ Complete the `TODO(Lab 3)` blocks across all **4 starter files**:
 ### Verify Lab 3 Offline
 
 ```bash
+# Track B (Full: SQL DDL/Indexes + both Python loaders)
 make TRACK=starter verify-lab LAB=3
+
+# Track A (4-Hour Express: SQL DDL/Indexes 01 & 03 only)
+make TRACK=starter MODE=express verify-lab LAB=3
 ```
 
 **Checkpoint Expected Output:** `[PASS] Lab 3 (starter/)` — all 4 SQL & Python loader checks green!

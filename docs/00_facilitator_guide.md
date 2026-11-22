@@ -5,6 +5,8 @@
 **Primary Region:** Bangkok, Thailand (`asia-southeast3` / `regional-asia-southeast3`, 3-zone synchronous quorum, `99.99%` SLA, Thailand PDPA data residency)  
 **Secondary / AI & DR Region:** Singapore (`asia-southeast1` / `regional-asia-southeast1`, `~25 ms` RTT — Vertex AI embeddings & LLM, Model Armor templates, cross-region backup copy DR, and lab quota fallback)
 
+> **Zero-Docker vs. With-Docker Room Setup:** Run every customer room **Zero-Docker by default**! Have attendees start with `make preflight && make lab1-no-docker` (pure Python 3 stdlib, `< 2s`, demonstrates `WALK` vs `TRAIL` cycle explosion, JVM heap OOM pressure, and 15/15 SHA-256 APOC parity). Only attendees with Docker Desktop on Track B need optional `docker compose up -d` in `data/structured/`. For Track A (4-Hour Express), instruct attendees to verify partial scope with `make TRACK=starter MODE=express verify-lab LAB=1..8`.
+
 ---
 
 ## 1. Cohort Cost Budget (Verified 2026 Bangkok 100-PU Sandbox Rates)
@@ -38,11 +40,13 @@ Every participant runs an isolated `100` processing unit (**`100` PU**) **Cloud 
 - [ ] Confirm attendee GCP sandbox projects (or dedicated workshop project per attendee/pair) with billing enabled and IAM permissions to manage Cloud Spanner, Vertex AI, Cloud Run, Secret Manager, and Cloud Storage.
 - [ ] Verify Cloud Spanner Enterprise quota in **`asia-southeast3` (Bangkok)** for the expected cohort count (`100` PUs × attendees + `100` PUs instructor backup instance). If a customer org policy restricts `asia-southeast3`, pre-approve the **Singapore fallback** (`--region asia-southeast1`).
 - [ ] Verify Vertex AI API (`aiplatform.googleapis.com`) and Model Armor (`modelarmor.googleapis.com`) access in **`asia-southeast1` (Singapore)**.
-- [ ] Confirm attendee machines have: `git`, `python3` (`>= 3.10`), `gcloud` CLI (updated for `spanner` & `model-armor`), `make`, **Antigravity IDE** (or compatible MCP IDE), and optional Docker Desktop (for Lab 1 Track B local Neo4j CE).
+- [ ] Confirm attendee machines have: `git`, `python3` (`>= 3.10`), `gcloud` CLI (updated for `spanner` & `model-armor`), `make`, and **Antigravity IDE** (or compatible MCP IDE). **Docker Desktop is optional** (Zero-Docker Lab 1 simulator via `make lab1-no-docker` + native MCP Toolbox binary work everywhere).
 
 ### T-1 Day (Instructor Dry-Run & Live Golden Instance)
 - [ ] Clone the repository clean and run the complete zero-dependency offline verification suite:
   ```bash
+  make preflight
+  make lab1-no-docker
   make validate-skills
   make test
   make verify-starter-stubs
@@ -53,13 +57,18 @@ Every participant runs an isolated `100` processing unit (**`100` PU**) **Cloud 
 - [ ] Pre-provision **one golden instructor sandbox** in Bangkok (`regional-asia-southeast3`) so live demos never stall waiting on DDL LROs or index backfills:
   ```bash
   cp .env.example .env   # Set GOOGLE_CLOUD_PROJECT=<instructor-sandbox>
+  gcloud auth application-default set-quota-project "${GOOGLE_CLOUD_PROJECT}"
+  export SPANNER_DISABLE_BUILTIN_METRICS=true   # Optional: clean CLI output
+  make preflight STRICT_GCP=1
   make install
-  make provision-gcp
-  python3 solution/pipelines/neo4j_to_spanner_loader.py
-  python3 solution/pipelines/unstructured_graphrag_ingest.py
-  bash scripts/provision_workshop_env.sh apply-postload
-  bash scripts/verify_live_gcp.sh
+  make install-mcp       # Optional Lab 6 live ADK/MCP packages
+  make provision-gcp     # ~2 min (Base DDL 01/02/04)
+  python3 solution/pipelines/neo4j_to_spanner_loader.py         # <5s
+  python3 solution/pipelines/unstructured_graphrag_ingest.py    # ~22s (152 SG embeddings)
+  bash scripts/provision_workshop_env.sh apply-postload         # ~10 min on 100 PU (start before break, or use 300 PU!)
+  make verify-live
   ```
+- [ ] **Live-Verified Room Pacing Benchmarks (`100` PU Bangkok + Singapore):** Base DDL create **~2 min**, Path A **<5s**, Path B + 152 Singapore embeddings **~22s**, 4-stage `apply-postload` (20 indexes/FTS/ScaNN/`ANALYZE`) **~10 min** (*start right before the morning break, or temporarily provision `300` PU for faster live demo backfill!*), Hero A/B/C & Lab SQL/GQL **33–520 ms**, all 3 Lab 4 Data Boost Graph Algos **~3 min**, full Lab 6 3-service Bangkok Cloud Run MCP + SG DLP/Model Armor **~3–4 min**, and Lab 8 Bangkok→Singapore backup DR **~35–40 min on `100` PU** (~22m source backup + ~18m cross-region copy — kick off asynchronously or run on facilitator instance).
 - [ ] Pre-verify Spanner Studio Graph tab rendering on Query 1A (`solution/sql/11_observability_and_studio_viz.sql`) so the interactive `api-payments-charge-v2` blast-radius visualization is open in a browser tab.
 - [ ] Pre-test `bash scripts/provision_workshop_env.sh backup-to-singapore --dry-run` (and optionally create one live Singapore DR backup on the instructor project for Lab 8).
 
@@ -75,8 +84,8 @@ Every participant runs an isolated `100` processing unit (**`100` PU**) **Cloud 
 
 | Module / Lab | Track A (240 min) | Track B (480 min) | Core Teaching Objective & Offline Check |
 | :--- | :---: | :---: | :--- |
-| **Kickoff & Setup** | *(included in Lab 1)* | *(included in Lab 1)* | Before/After 3-store consolidation vision, Bangkok+Singapore topology, `make validate-skills` |
-| **Lab 1: Neo4j CE Migration** | 30 min | 60 min | APOC heap-safe export, `MATCH TRAIL` vs `WALK`, openCypher → GQL (`make TRACK=starter verify-lab LAB=1`) |
+| **Kickoff & Setup** | *(included in Lab 1)* | *(included in Lab 1)* | Before/After 3-store consolidation vision, Bangkok+Singapore topology, `make preflight`, `make validate-skills` |
+| **Lab 1: Neo4j CE Migration** | 30 min | 60 min | Zero-Docker `make lab1-no-docker` simulator, APOC heap-safe export, `MATCH TRAIL` vs `WALK`, openCypher → GQL (`LAB=1`) |
 | **Lab 2: Two-Path Convergence** | 20 min | 45 min | 68/174/60/234/45 corpus, 5 topological traps, PDPA topology (`make TRACK=starter verify-lab LAB=2`) |
 | **Lab 3: Schema & Ingestion** | 45 min | 90 min | `INV-06` dual-cascade ban, dual-projected edges, post-load 2×10 LROs, `asia-southeast1` embeddings (`LAB=3`) |
 | **Lab 4: Search Strategies** | 25 min | 60 min | GQL `IS_FIRST`/`factorize_left`, Data Boost `PageRank`, FTS `SdlcSynonymDict`, Fuzzy, JSON/Num, KNN, ScaNN (`LAB=4`) |
@@ -85,7 +94,7 @@ Every participant runs an isolated `100` processing unit (**`100` PU**) **Cloud 
 | **Lab 7: Sizing & Bangkok TCO** | 20 min | 45 min | 2026 Bangkok vs Singapore rates, CUDs, SSD→HDD Locality Groups, DR egress, 3-store TCO worksheet (`LAB=7`) |
 | **Lab 8: Observability & Teardown** | 15 min | 30 min | Spanner Studio `SAFE_TO_JSON(p)`, `SPANNER_SYS` Lock microsecond trap, Key Visualizer, Pre-Splitting, **Cleanup** (`LAB=8`) |
 
-> **Pacing Tip for 4-Hour Express (Track A):** Run Labs 1–2 and 4–5 offline via `make TRACK=starter verify-lab` while projecting the instructor's live Bangkok Cloud Spanner instance for the 6 "Aha!" proof points below. Reserve hands-on live GCP execution for Lab 5 (Hero Query) and Lab 6 (`make demo-mcp-mock` + Antigravity IDE MCP).
+> **Pacing Tip for 4-Hour Express (Track A):** Run Labs 1–4 offline with `make TRACK=starter MODE=express verify-lab LAB=N` (checks core Express subsets in Labs 1–4 and all core deliverables in Labs 5–8) while projecting the instructor's live Bangkok Cloud Spanner instance for the 6 "Aha!" proof points below. Reserve hands-on live GCP execution for Lab 5 (Hero Query) and Lab 6 (`make demo-mcp-mock` + Antigravity IDE MCP).
 
 ---
 
@@ -136,20 +145,17 @@ Every participant runs an isolated `100` processing unit (**`100` PU**) **Cloud 
 
 Run these steps with every attendee during the final 10 minutes of Lab 8 to ensure **zero residual GCP spend**:
 
-- [ ] Delete any manual backups on both `sdlc-kg-enterprise` (Bangkok) and optional `sdlc-kg-dr-singapore` (Singapore) — Cloud Spanner blocks instance deletion if any backup remains!
-- [ ] Run `make cleanup-gcp` (or `bash scripts/provision_workshop_env.sh cleanup`) and type `DELETE` when prompted.
+- [ ] Run full teardown & 6-category zero-residual audit (deletes Lab 6 Cloud Run MCP services, Secret Manager secrets, all 7 workshop SAs, Singapore DLP/Model Armor templates, GCS staging bucket, plus primary Bangkok & Singapore DR Spanner backups/instances):
+  ```bash
+  make cleanup-all-gcp
+  # Or Spanner-only teardown: make cleanup-gcp
+  # Preview zero-residual audit anytime: bash scripts/verify_zero_residual.sh --dry-run
+  ```
 - [ ] Verify zero Spanner instances remain:
   ```bash
   gcloud spanner instances list --project="${GOOGLE_CLOUD_PROJECT}"
   ```
-- [ ] If Lab 6 Cloud Run services or Secret Manager secrets were deployed, remove them:
-  ```bash
-  for p in impact-analyst adr-curator security-auditor; do
-    gcloud run services delete "sdlc-mcp-${p}" --region=asia-southeast3 --quiet || true
-    gcloud secrets delete "sdlc-tools-${p}" --quiet || true
-  done
-  ```
-- [ ] If Lab 1 local Neo4j CE Docker container was started, stop and remove volumes:
+- [ ] If Lab 1 optional Docker Neo4j CE container was started, stop and remove volumes:
   ```bash
   (cd data/structured && docker compose down -v)
   ```

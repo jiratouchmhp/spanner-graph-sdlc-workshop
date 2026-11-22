@@ -49,9 +49,10 @@
 -- 2. Schema-Free Algorithm Output Persistence Table — PROVIDED COMPLETE
 --    Tagged by algo_run_id so iterative experiments persist without ALTER TABLE.
 -- -----------------------------------------------------------------------------
-CREATE TABLE ServiceAlgoProperty (
+CREATE TABLE IF NOT EXISTS ServiceAlgoProperty (
   service_id STRING(64) NOT NULL,
   algo_run_id STRING(200) NOT NULL,
+  target_service_id STRING(64),
   int_val INT64,
   float_val FLOAT64,
 ) PRIMARY KEY (service_id, algo_run_id),

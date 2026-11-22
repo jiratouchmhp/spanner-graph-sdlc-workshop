@@ -4,16 +4,19 @@
 Antigravity Skill for Lab 6:
   - Primary: .agents/skills/spanner-mcp-toolbox-and-agent-security/SKILL.md
 
-Your Task (`TODO(Lab 6)`):
+Lab 6 Exercise:
   Implement `run_persona_query()` below so all three Acme Commerce personas run
-  with strict least-privilege tool isolation and OIDC fail-closed enforcement:
-    1. impact-analyst   -> personas/tools.impact-analyst.yaml   (4 readOnly tools)
-    2. adr-curator      -> personas/tools.adr-curator.yaml      (4 read + scoped PROPOSED ADR write)
-    3. security-auditor -> personas/tools.security-auditor.yaml (4 readOnly compliance audit tools)
+  with strict least-privilege tool isolation and OIDC fail-closed enforcement
+  against YOUR own `starter/mcp/tools.yaml` (no dependency on `solution/`!):
+    1. impact-analyst   -> impact-analyst-toolset   (4 readOnly tools)
+    2. adr-curator      -> adr-curator-toolset      (4 read + scoped PROPOSED ADR write)
+    3. security-auditor -> security-auditor-toolset (4 readOnly compliance audit tools)
 
   Security Requirements to Enforce inside `run_persona_query()`:
-    - Load the persona's sliced YAML file (`solution/mcp/personas/tools.<persona>.yaml`)
-      and raise `SecurityPolicyError` if `tool_name` is NOT in that persona's allowlist.
+    - Call `load_persona_config(persona_id, root)` (which slices `starter/mcp/tools.yaml`
+      by `toolsets[meta["toolset"]]`, with optional `personas/tools.<persona>.yaml`
+      fallback) and raise `SecurityPolicyError` if `tool_name` is NOT in that
+      persona's allowlist.
     - Compute LLM-visible parameters (`get_llm_visible_parameters`) and server-bound
       OIDC parameters (`get_oidc_bound_parameters`).
     - Strip any LLM-supplied arguments attempting to spoof an OIDC-bound parameter
@@ -101,6 +104,34 @@ class SecurityPolicyError(PermissionError):
     """Raised when an agent attempts an unauthorized tool or parameter action."""
 
 
+def _parse_yaml_scalar(raw_val: str) -> Any:
+    """Parse a simple YAML scalar or inline empty dict/list using stdlib only."""
+    vs = raw_val.strip()
+    if vs == "{}":
+        return {}
+    if vs == "[]":
+        return []
+    if vs.startswith("[") and vs.endswith("]"):
+        inner = vs[1:-1].strip()
+        if not inner:
+            return []
+        return [_parse_yaml_scalar(part) for part in inner.split(",")]
+    if vs.startswith('"') and vs.endswith('"') and len(vs) >= 2:
+        return vs[1:-1].replace("\\\\", "\\").replace('\\"', '"')
+    if vs.startswith("'") and vs.endswith("'") and len(vs) >= 2:
+        return vs[1:-1].replace("''", "'")
+    low = vs.lower()
+    if low == "true":
+        return True
+    if low == "false":
+        return False
+    if low in ("null", "~"):
+        return None
+    if re.fullmatch(r"-?\d+", vs):
+        return int(vs)
+    return vs
+
+
 def _parse_yaml_stdlib_fallback(text: str) -> dict[str, Any]:
     """Minimal stdlib parser fallback when PyYAML is unavailable in --mock mode."""
     result: dict[str, Any] = {
@@ -114,112 +145,176 @@ def _parse_yaml_stdlib_fallback(text: str) -> dict[str, Any]:
     cur_item: str | None = None
     cur_sub: str | None = None
     cur_param: dict[str, Any] | None = None
-    in_statement = False
+    block_field: str | None = None
+    block_indent: int = 0
+    block_lines: list[str] = []
     param_item_indent: int | None = None
     param_prop_indent: int | None = None
-    in_param_auth = False
+    param_list_key: str | None = None
     auth_item_indent: int | None = None
 
+    def _flush_block() -> None:
+        nonlocal block_field, block_lines
+        if block_field and section == "tools" and cur_item and cur_item in result["tools"]:
+            joiner = "\n" if block_field == "statement" else " "
+            result["tools"][cur_item][block_field] = joiner.join(block_lines).strip()
+        block_field = None
+        block_lines = []
+
     for raw_line in text.splitlines():
+        if block_field is not None:
+            if not raw_line.strip():
+                if block_field == "statement":
+                    block_lines.append("")
+                continue
+            cur_indent = len(raw_line) - len(raw_line.lstrip(" "))
+            if cur_indent >= block_indent:
+                block_lines.append(
+                    raw_line[block_indent:] if block_field == "statement" else raw_line.strip()
+                )
+                continue
+            _flush_block()
+
         if not raw_line.strip() or raw_line.lstrip().startswith("#"):
             continue
         indent = len(raw_line) - len(raw_line.lstrip(" "))
         stripped = raw_line.strip()
+        if "#" in stripped and not stripped.startswith("- "):
+            in_q: str | None = None
+            cut_idx: int | None = None
+            for idx, ch in enumerate(stripped):
+                if ch in ("'", '"'):
+                    if in_q is None:
+                        in_q = ch
+                    elif in_q == ch:
+                        in_q = None
+                elif ch == "#" and in_q is None and (idx == 0 or stripped[idx - 1].isspace()):
+                    cut_idx = idx
+                    break
+            if cut_idx is not None:
+                stripped = stripped[:cut_idx].rstrip()
+                if not stripped:
+                    continue
 
-        if indent == 0 and stripped.endswith(":"):
-            section = stripped[:-1]
+        if indent == 0 and ":" in stripped:
+            key, rest = stripped.split(":", 1)
+            section = key.strip()
             cur_item = None
             cur_sub = None
             cur_param = None
-            in_statement = False
-            in_param_auth = False
             param_item_indent = None
-            result.setdefault(section, {})
+            param_prop_indent = None
+            param_list_key = None
+            auth_item_indent = None
+            rest_s = rest.strip()
+            if rest_s:
+                result[section] = _parse_yaml_scalar(rest_s)
+            else:
+                result.setdefault(section, {})
             continue
-
-        if in_statement and indent >= 6:
-            continue
-        if indent <= 4 and not stripped.startswith("- "):
-            in_statement = False
 
         if section in ("sources", "embeddingModels", "authServices"):
+            if not isinstance(result.get(section), dict):
+                result[section] = {}
             if indent == 2 and stripped.endswith(":"):
-                cur_item = stripped[:-1]
+                cur_item = stripped[:-1].strip()
                 result[section][cur_item] = {}
             elif indent == 4 and cur_item and ":" in stripped:
                 k, v = stripped.split(":", 1)
-                val: Any = v.strip().strip('"').strip("'")
-                if val.isdigit():
-                    val = int(val)
-                result[section][cur_item][k.strip()] = val
+                result[section][cur_item][k.strip()] = _parse_yaml_scalar(v)
         elif section == "toolsets":
-            if indent == 2 and not stripped.startswith("- ") and stripped.endswith(":"):
-                cur_item = stripped[:-1]
-                result["toolsets"][cur_item] = []
+            if not isinstance(result.get("toolsets"), dict):
+                result["toolsets"] = {}
+            if indent == 2 and not stripped.startswith("- ") and ":" in stripped:
+                k, v = stripped.split(":", 1)
+                cur_item = k.strip()
+                result["toolsets"][cur_item] = _parse_yaml_scalar(v) if v.strip() else []
             elif cur_item and stripped.startswith("- ") and indent in (2, 4):
-                result["toolsets"][cur_item].append(stripped[2:].strip())
+                result["toolsets"][cur_item].append(_parse_yaml_scalar(stripped[2:]))
         elif section == "tools":
+            if not isinstance(result.get("tools"), dict):
+                result["tools"] = {}
             if indent == 2 and not stripped.startswith("- ") and stripped.endswith(":"):
-                cur_item = stripped[:-1]
+                cur_item = stripped[:-1].strip()
                 result["tools"][cur_item] = {"parameters": [], "authRequired": []}
                 cur_sub = None
                 cur_param = None
-                in_param_auth = False
                 param_item_indent = None
                 param_prop_indent = None
+                param_list_key = None
+                auth_item_indent = None
             elif cur_item and cur_sub == "authRequired" and stripped.startswith("- ") and indent in (4, 6):
-                result["tools"][cur_item]["authRequired"].append(stripped[2:].strip())
+                result["tools"][cur_item]["authRequired"].append(_parse_yaml_scalar(stripped[2:]))
             elif (
                 cur_item
-                and cur_sub == "parameters"
+                and cur_sub in ("parameters", "templateParameters")
                 and stripped.startswith("- name:")
                 and (
                     (param_item_indent is None and indent in (4, 6))
                     or (param_item_indent is not None and indent == param_item_indent)
                 )
             ):
-                cur_param = {"name": stripped.split(":", 1)[1].strip()}
-                result["tools"][cur_item]["parameters"].append(cur_param)
+                cur_param = {"name": _parse_yaml_scalar(stripped.split(":", 1)[1])}
+                result["tools"][cur_item].setdefault(cur_sub, []).append(cur_param)
                 param_item_indent = indent
                 param_prop_indent = indent + 2
-                in_param_auth = False
+                param_list_key = None
                 auth_item_indent = None
             elif indent == 4 and cur_item and not stripped.startswith("- "):
-                in_param_auth = False
                 cur_param = None
                 param_item_indent = None
-                if stripped.startswith("statement:"):
-                    in_statement = True
-                    cur_sub = "statement"
-                elif stripped.endswith(":"):
-                    cur_sub = stripped[:-1]
-                    if cur_sub not in result["tools"][cur_item]:
-                        result["tools"][cur_item][cur_sub] = []
-                elif ":" in stripped:
+                param_prop_indent = None
+                param_list_key = None
+                auth_item_indent = None
+                if ":" in stripped:
                     k, v = stripped.split(":", 1)
                     k = k.strip()
                     vs = v.strip()
-                    if vs.lower() == "true":
-                        result["tools"][cur_item][k] = True
-                    elif vs.lower() == "false":
-                        result["tools"][cur_item][k] = False
+                    if vs in ("|", "|-", ">", ">-"):
+                        block_field = k
+                        block_indent = 6
+                        block_lines = []
+                        cur_sub = k
+                    elif not vs:
+                        cur_sub = k
+                        result["tools"][cur_item].setdefault(k, [])
                     else:
-                        result["tools"][cur_item][k] = vs.strip('"').strip("'")
-                    cur_sub = k
+                        result["tools"][cur_item][k] = _parse_yaml_scalar(vs)
+                        cur_sub = k
             elif cur_param is not None and param_prop_indent is not None:
-                if in_param_auth and stripped.startswith("- name:") and indent in (param_prop_indent, param_prop_indent + 2):
-                    cur_param["authServices"].append({"name": stripped.split(":", 1)[1].strip()})
+                if (
+                    param_list_key == "authServices"
+                    and stripped.startswith("- name:")
+                    and indent in (param_prop_indent, param_prop_indent + 2)
+                ):
+                    cur_param["authServices"].append({"name": _parse_yaml_scalar(stripped.split(":", 1)[1])})
                     auth_item_indent = indent + 2
-                elif in_param_auth and auth_item_indent is not None and indent == auth_item_indent and stripped.startswith("field:"):
-                    cur_param["authServices"][-1]["field"] = stripped.split(":", 1)[1].strip()
-                elif indent == param_prop_indent and not stripped.startswith("- "):
-                    if stripped == "authServices:":
-                        cur_param["authServices"] = []
-                        in_param_auth = True
-                    elif ":" in stripped:
-                        in_param_auth = False
-                        k, v = stripped.split(":", 1)
-                        cur_param[k.strip()] = v.strip().strip('"').strip("'")
+                elif (
+                    param_list_key == "authServices"
+                    and auth_item_indent is not None
+                    and indent == auth_item_indent
+                    and stripped.startswith("field:")
+                ):
+                    cur_param["authServices"][-1]["field"] = _parse_yaml_scalar(stripped.split(":", 1)[1])
+                elif (
+                    param_list_key == "allowedValues"
+                    and stripped.startswith("- ")
+                    and indent in (param_prop_indent, param_prop_indent + 2)
+                ):
+                    cur_param["allowedValues"].append(_parse_yaml_scalar(stripped[2:]))
+                elif indent == param_prop_indent and not stripped.startswith("- ") and ":" in stripped:
+                    k, v = stripped.split(":", 1)
+                    k = k.strip()
+                    vs = v.strip()
+                    if not vs and k in ("authServices", "allowedValues"):
+                        cur_param[k] = []
+                        param_list_key = k
+                        auth_item_indent = None
+                    else:
+                        param_list_key = None
+                        auth_item_indent = None
+                        cur_param[k] = _parse_yaml_scalar(vs)
+    _flush_block()
     return result
 
 
@@ -235,6 +330,56 @@ def load_yaml_file(path: Path) -> dict[str, Any]:
         return loaded
     except ImportError:
         return _parse_yaml_stdlib_fallback(text)
+
+
+def load_persona_config(
+    persona_id: str,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    """Load a persona's isolated tool allowlist directly from `starter/mcp/tools.yaml`.
+
+    Resolution order (zero dependency on `solution/`):
+      1. Slice sibling `starter/mcp/tools.yaml` via `toolsets[meta["toolset"]]` so
+         `--mock` directly tests your Lab 6 `starter/mcp/tools.yaml` edits!
+      2. If `starter/mcp/tools.yaml` is absent, fall back to a rendered sibling
+         `personas/tools.<persona>.yaml` (or `solution/mcp/personas/` if present).
+    """
+    if persona_id not in PERSONA_META:
+        raise ValueError(f"Unknown persona {persona_id!r}")
+    meta = PERSONA_META[persona_id]
+    ts_name = meta["toolset"]
+    mcp_dir = Path(__file__).resolve().parent
+    starter_tools_yaml = mcp_dir / "tools.yaml"
+
+    if starter_tools_yaml.is_file():
+        master = load_yaml_file(starter_tools_yaml)
+        toolsets = master.get("toolsets") or {}
+        if ts_name not in toolsets or not toolsets[ts_name]:
+            raise SecurityPolicyError(
+                f"{starter_tools_yaml} does not define non-empty toolset '{ts_name}' yet; "
+                "complete the Lab 6 `toolsets:` section in starter/mcp/tools.yaml first."
+            )
+        all_tools = master.get("tools") or {}
+        allowed_names = list(toolsets[ts_name])
+        sliced_tools = {t: all_tools[t] for t in allowed_names if t in all_tools}
+        return {
+            "sources": master.get("sources") or {},
+            "embeddingModels": master.get("embeddingModels") or {},
+            "authServices": master.get("authServices") or {},
+            "tools": sliced_tools,
+            "toolsets": {ts_name: allowed_names},
+        }
+
+    root = repo_root or mcp_dir.parents[1]
+    for candidate in (
+        mcp_dir / "personas" / meta["yaml_filename"],
+        root / "solution" / "mcp" / "personas" / meta["yaml_filename"],
+    ):
+        if candidate.is_file():
+            return load_yaml_file(candidate)
+    raise FileNotFoundError(
+        f"No tools.yaml or persona YAML found for '{persona_id}' under {mcp_dir}"
+    )
 
 
 def load_acme_corpus(repo_root: Path) -> dict[str, list[dict[str, str]]]:
@@ -544,8 +689,10 @@ def run_persona_query(
 
     TODO(Lab 6): Implement isolated persona toolset enforcement & OIDC claim binding!
       Steps to complete:
-        1. Validate `persona_id in PERSONA_META` and load its sliced YAML from
-           `(repo_root or Path(__file__).resolve().parents[2]) / "solution" / "mcp" / "personas" / meta["yaml_filename"]`.
+        1. Validate `persona_id in PERSONA_META` and call
+           `persona_cfg = load_persona_config(persona_id, repo_root)` — this slices
+           YOUR `starter/mcp/tools.yaml` via `toolsets[meta["toolset"]]` with zero
+           dependency on `solution/`!
         2. Check `tool_name in persona_cfg["tools"]`; raise `SecurityPolicyError`
            if a persona attempts to invoke any tool outside its isolated allowlist.
         3. Compute `llm_visible = get_llm_visible_parameters(tool_cfg)` and
@@ -555,10 +702,20 @@ def run_persona_query(
         5. If `tool_cfg.get("authRequired")` or `oidc_bound`, fail closed with
            `SecurityPolicyError` unless `oidc_claims` supplies every required
            claim field, then inject those verified claims server-side!
-        6. When `mock=True`, dispatch to `_mock_exec_blast_radius`,
-           `_mock_exec_list_my_team_assets`, `_mock_exec_draft_adr`, or
-           `_mock_exec_audit_compliance` and return the result envelope matching
-           `solution/mcp/adk_multi_agent_demo.py`.
+        6. When `mock=True`, load `corpus = load_acme_corpus(root)`, dispatch to
+           `_mock_exec_blast_radius`, `_mock_exec_list_my_team_assets`,
+           `_mock_exec_draft_adr`, or `_mock_exec_audit_compliance`, and return:
+           ```python
+           {
+               "persona": persona_id,
+               "tool": tool_name,
+               "read_only": bool(tool_cfg.get("readOnly", False)),
+               "llm_visible_params": llm_visible,
+               "oidc_bound_params": list(oidc_bound.keys()),
+               "llm_injected_params_stripped": injected_blocked,
+               "result": data,
+           }
+           ```
     """
     raise NotImplementedError(
         "TODO(Lab 6): bind isolated persona toolset and verify OIDC auth"

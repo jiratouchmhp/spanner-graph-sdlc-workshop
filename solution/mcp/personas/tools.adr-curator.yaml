@@ -37,6 +37,7 @@ tools:
       services, flagging deprecated legacy v1 AT_RISK callers, and attaching governing ADRs, compliance
       requirements, and hybrid RRF (ScaNN ANN + FTS) Markdown citations.
     statement: |
+      @{optimizer_version=latest}
       WITH
         query_vec AS (
           SELECT
@@ -125,43 +126,50 @@ tools:
           FROM raw_blast
           GROUP BY impacted_service_id
         ),
-        target_adrs AS (
-          SELECT ARRAY_AGG(
-            STRUCT(d.adr_id, d.title, ag.governance_type)
-            ORDER BY d.adr_id ASC
-          ) AS governing_adrs
-          FROM AdrGovernsApi AS ag
-          JOIN Adrs AS d ON ag.adr_id = d.adr_id
-          WHERE ag.api_id = @api_id
-        ),
-        target_reqs AS (
-          SELECT ARRAY_AGG(
-            STRUCT(r.req_id, r.framework, r.severity, ra.compliance_status)
-            ORDER BY r.req_id ASC
-          ) AS applicable_requirements
-          FROM ReqAppliesToApi AS ra
-          JOIN Requirements AS r ON ra.req_id = r.req_id
-          WHERE ra.api_id = @api_id
-        ),
-        top_citations AS (
-          SELECT ARRAY_AGG(
-            STRUCT(dc.source_path, dc.section_heading, ROUND(r.rrf_score, 4) AS rrf_score)
-            ORDER BY r.rrf_score DESC, dc.source_path ASC
-            LIMIT 8
-          ) AS markdown_citations
-          FROM rrf_ranked AS r
-          JOIN DocumentChunks AS dc ON r.chunk_id = dc.chunk_id
-          WHERE EXISTS (
-            SELECT 1
-            FROM ChunkEntityMentions AS cem
-            WHERE cem.chunk_id = dc.chunk_id
-              AND (
-                cem.entity_id = @api_id
-                OR cem.entity_id IN (SELECT impacted_service_id FROM dedup_blast)
-                OR cem.entity_id IN (SELECT adr_id FROM AdrGovernsApi WHERE api_id = @api_id)
-                OR cem.entity_id IN (SELECT req_id FROM ReqAppliesToApi WHERE api_id = @api_id)
+        api_governance AS (
+          SELECT
+            ARRAY(
+              SELECT AS STRUCT
+                d.adr_id,
+                d.title,
+                ag.governance_type
+              FROM AdrGovernsApi AS ag
+              JOIN Adrs AS d ON ag.adr_id = d.adr_id
+              WHERE ag.api_id = @api_id
+              ORDER BY d.adr_id ASC
+            ) AS governing_adrs,
+            ARRAY(
+              SELECT AS STRUCT
+                r.req_id,
+                r.framework,
+                r.severity,
+                ra.compliance_status
+              FROM ReqAppliesToApi AS ra
+              JOIN Requirements AS r ON ra.req_id = r.req_id
+              WHERE ra.api_id = @api_id
+              ORDER BY r.req_id ASC
+            ) AS applicable_requirements,
+            ARRAY(
+              SELECT AS STRUCT
+                dc.source_path,
+                dc.section_heading,
+                ROUND(r.rrf_score, 4) AS rrf_score
+              FROM rrf_ranked AS r
+              JOIN DocumentChunks AS dc ON r.chunk_id = dc.chunk_id
+              WHERE EXISTS (
+                SELECT 1
+                FROM ChunkEntityMentions AS cem
+                WHERE cem.chunk_id = dc.chunk_id
+                  AND (
+                    cem.entity_id = @api_id
+                    OR cem.entity_id IN (SELECT impacted_service_id FROM dedup_blast)
+                    OR cem.entity_id IN (SELECT adr_id FROM AdrGovernsApi WHERE api_id = @api_id)
+                    OR cem.entity_id IN (SELECT req_id FROM ReqAppliesToApi WHERE api_id = @api_id)
+                  )
               )
-          )
+              ORDER BY r.rrf_score DESC, dc.source_path ASC
+              LIMIT 8
+            ) AS markdown_citations
         )
       SELECT
         b.impacted_service_id,
@@ -180,12 +188,13 @@ tools:
           WHERE sca.service_id = b.impacted_service_id
             AND (sca.migration_status = 'AT_RISK' OR legacy_api.lifecycle_status = 'DEPRECATED')
         ) AS has_legacy_v1_risk,
-        (SELECT governing_adrs FROM target_adrs) AS governing_adrs,
-        (SELECT applicable_requirements FROM target_reqs) AS applicable_requirements,
-        (SELECT markdown_citations FROM top_citations) AS markdown_citations
+        gov.governing_adrs,
+        gov.applicable_requirements,
+        gov.markdown_citations
       FROM dedup_blast AS b
       JOIN Services AS s ON b.impacted_service_id = s.service_id
       JOIN Owners AS o ON s.owner_id = o.owner_id
+      CROSS JOIN api_governance AS gov
       ORDER BY
         b.hop_distance ASC,
         b.impact_category_rank ASC,
@@ -226,6 +235,7 @@ tools:
       fusing ScaNN vector search (APPROX_COSINE_DISTANCE) and Full-Text Search (SdlcSynonymDict + enhance_query)
       via Reciprocal Rank Fusion (RRF, k=60) without analytic window functions.
     statement: |
+      @{optimizer_version=latest}
       WITH
         query_vec AS (
           SELECT
@@ -307,12 +317,12 @@ tools:
       description: Optional document category filter (empty string searches all categories)
       default: ''
       allowedValues:
-      - ''
-      - service
-      - api
-      - adr
-      - requirement
-      - owner
+      - ^$
+      - ^service$
+      - ^api$
+      - ^adr$
+      - ^requirement$
+      - ^owner$
     - name: top_k
       type: integer
       description: Maximum ranked Markdown chunks to return
@@ -375,17 +385,17 @@ tools:
       description: Optional business domain filter (empty string returns all domains)
       default: ''
       allowedValues:
-      - ''
-      - payments
-      - checkout
-      - finance
-      - orders
-      - ecosystem
-      - messaging
-      - analytics
-      - security
-      - risk
-      - merchandising
+      - ^$
+      - ^payments$
+      - ^checkout$
+      - ^finance$
+      - ^orders$
+      - ^ecosystem$
+      - ^messaging$
+      - ^analytics$
+      - ^security$
+      - ^risk$
+      - ^merchandising$
     - name: max_rows
       type: integer
       description: Maximum services to return

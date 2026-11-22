@@ -18,10 +18,11 @@ Operational handbook for running Labs 1–8 across **Track A (4-Hour Express)** 
 
 ## 2. Complete 15-File `starter/` → `solution/` Checkpoint Matrix
 
-Every `starter/` file intentionally fails `make TRACK=starter verify-lab LAB=N` until its `TODO(Lab N)` markers are completed. Verify any single lab offline without GCP credentials:
+Every `starter/` file intentionally fails `make TRACK=starter verify-lab LAB=N` until its `TODO(Lab N)` markers are completed. Verify any single lab offline without GCP credentials (`MODE=express` checks Track A 4h subsets in Labs 1–4; default `MODE=full` checks all 15 files):
 
 ```bash
 make TRACK=starter verify-lab LAB=<1..8>
+make TRACK=starter MODE=express verify-lab LAB=<1..8>
 make TRACK=solution verify-lab LAB=all
 ```
 
@@ -74,41 +75,64 @@ make TRACK=solution verify-lab LAB=all
 ### Lab 8 — Observability, Spanner Studio Viz & Teardown (1 File)
 - **Starter**: `starter/sql/11_observability_and_studio_viz.sql` (`TODO(Lab 8)`): Spanner Studio `RETURN SAFE_TO_JSON(p)` path query + `SPANNER_SYS` Query, Lock (converting microseconds via `/ 1000000.0`), and Split-Point queries.
 - **Reference**: `solution/sql/11_observability_and_studio_viz.sql`, `scripts/{provision_workshop_env.sh,verify_live_gcp.sh}`
-- **`verify_lab.py` Assertions**: Zero `TODO(Lab`; checks `SAFE_TO_JSON`, `SPANNER_SYS.QUERY_STATS_TOP_HOUR`, `SPANNER_SYS.LOCK_STATS_TOP_HOUR`, `1000000`, `SPANNER_SYS.USER_SPLIT_POINTS`, Bangkok defaults in `provision_workshop_env.sh`, and all 8 skills under `.agents/skills/`.
+- **`verify_lab.py` Assertions**: Zero `TODO(Lab`; checks `SAFE_TO_JSON`, `SPANNER_SYS.QUERY_STATS_TOP_HOUR`, `SPANNER_SYS.LOCK_STATS_TOP_HOUR`, `1000000.0` (or `1e6`), `SPANNER_SYS.USER_SPLIT_POINTS`, Bangkok defaults in `provision_workshop_env.sh`, and all 8 skills under `.agents/skills/`.
 
-## 3. `Makefile` Targets & 7-Module Offline Test Suite
+## 3. `Makefile` Targets & 8-Module Offline Test Suite
 
-### All 11 `Makefile` Targets
+### All 16 `Makefile` Targets
 
 | Target | Command / Default Arguments | Live GCP? | Purpose |
 | :--- | :--- | :---: | :--- |
-| `help` | `make help` | No | Prints target list and overrides (`TRACK`, `LAB`, `PRESET`, `REGION`, `WORKSHEET`) |
-| `install` | `make install` | No | Installs `solution/pipelines/requirements.txt` (`google-cloud-spanner`, `google-genai`, `pyyaml`) |
-| `test` | `make test` | No | Runs all 7 stdlib `unittest` modules under `tests/test_*.py` |
-| `validate-skills` | `make validate-skills` | No | Runs `tests/test_antigravity_skills.py` (YAML, line bounds, links, leaks, reusability) |
-| `verify-starter-stubs` | `make verify-starter-stubs` | No | Confirms all 15 `starter/` files have `TODO(Lab` and fail `verify_lab.py` while `solution/` passes |
-| `verify-lab` | `make TRACK=solution LAB=all verify-lab` | No | Runs `scripts/verify_lab.py --track $(TRACK) --lab $(LAB)` (`1..8` or `all`) |
+| `help` | `make help` | No | Prints all 16 targets and overrides (`TRACK`, `LAB`, `MODE`, `PRESET`, `REGION`, `WORKSHEET`) |
+| `preflight` | `make preflight` (`STRICT_GCP=1`) | No | Fast 5-second attendee readiness check (Python, regional defaults, Zero-Docker confirmation) |
+| `install` | `make install` | No | Creates PEP-668-safe `.venv` and installs `solution/pipelines/requirements.txt` |
+| `install-mcp` | `make install-mcp` | No | Installs optional Lab 6 live ADK/MCP & Model Armor dependencies (`solution/mcp/requirements.txt`) |
+| `test` | `make test` | No | Runs all 8 stdlib `unittest` modules under `tests/test_*.py` |
+| `validate-skills` | `make validate-skills` | No | Runs `scripts/setup_antigravity_skills.sh` + `tests/test_antigravity_skills.py` |
+| `verify-starter-stubs` | `make verify-starter-stubs` | No | Confirms all 15 `starter/` files fail `verify_lab.py` until solved while `solution/` passes |
+| `verify-lab` | `make TRACK=solution LAB=all MODE=full verify-lab` | No | Runs `scripts/verify_lab.py --track $(TRACK) --lab $(LAB) --mode $(MODE)` (`1..8` or `all`) |
+| `lab1-no-docker` | `make lab1-no-docker` | No | Runs Zero-Docker Lab 1 Neo4j CE & APOC simulator (`no_docker_neo4j_sim.py`), parity diff & Lab 1 check |
 | `sizing` | `make PRESET=all REGION=asia-southeast3 sizing` | No | Runs `solution/tools/sizing_calculator.py` (optional `WORKSHEET=starter/tools/customer_scale_worksheet.json`) |
-| `dry-run-pipelines` | `make dry-run-pipelines` | No | Executes Path A + Path B loaders and `apply_postload.py` with `--dry-run` (stdlib-only) |
+| `dry-run-pipelines` | `make dry-run-pipelines` | No | Executes APOC stager, Path A + Path B loaders, `apply_postload.py` & Hero replay with `--dry-run` |
 | `demo-mcp-mock` | `make demo-mcp-mock` | No | Runs `solution/mcp/adk_multi_agent_demo.py --mock` (persona isolation + prompt-injection check) |
 | `provision-gcp` | `make provision-gcp` | **YES** | Calls `scripts/provision_workshop_env.sh create` (Bangkok 100-PU Enterprise sandbox; confirm first!) |
-| `cleanup-gcp` | `make cleanup-gcp` | **YES** | Calls `scripts/provision_workshop_env.sh cleanup` (deletes sandbox instance/DB; confirm first!) |
+| `verify-live` | `make verify-live` | **YES** | Runs 5-check live Cloud Spanner verification (`scripts/verify_live_gcp.sh`; DDL, ScaNN, Hero, FGAC, DR) |
+| `cleanup-gcp` | `make cleanup-gcp` | **YES** | Calls `scripts/provision_workshop_env.sh cleanup` (deletes Spanner backups/instances; confirm first!) |
+| `cleanup-all-gcp` | `make cleanup-all-gcp` | **YES** | Full teardown (Cloud Run MCP, Secrets, SAs, DLP/Model Armor, GCS, Spanner) + `verify_zero_residual.sh` |
 
-### 7-Module Offline Test Suite (`tests/`)
+### 8-Module Offline Test Suite (`tests/`)
 
 1. `tests/test_sql_and_gql_invariants.py`: Enforces `INV-01`–`INV-09` across `solution/sql/01..11` and `.tmpl` files.
 2. `tests/test_dataset_and_hero_replay.py`: Verifies 68/174/60/234 counts, 100% FK RI, 45 Markdown docs & verbatim facts, `stage_apoc_export.py`, `--dry-run` loaders, and 7-row Hero fixture equality.
 3. `tests/test_mcp_toolbox_rbac.py`: Validates `tools.yaml` & 3 rendered persona YAMLs (no `databaseRole`, Vertex AI regional `project`+`location`, no `spanner-execute-sql`, OIDC `authServices`, dual-layer IAM script separation, `--mock` prompt-injection fail-closed).
 4. `tests/test_sizing_calculator.py`: Checks verified Bangkok/Singapore/Iowa 2026 SKU rates, CUDs, 4 presets, `>= 1,000` PU prod floor vs 100 PU workshop flag, Singapore backup DR egress, worksheet mode, and 3-store TCO savings `> 0`.
 5. `tests/test_antigravity_skills.py`: Audits all 8 skills under `.agents/skills/` (frontmatter, `< 1024`-char descriptions, line limits, 1-level links, zero orphan/nested/broken links, zero leaks, Skills #1–#7 Acme-free).
-6. `tests/test_starter_vs_solution_parity.py`: Verifies all 15 `starter/` files fail `--track starter --lab 1..8` while `--track solution --lab all` passes.
-7. `tests/test_docs_consistency.py`: Checks `README.md`, `WORKSHOP_CONTENT_PLAN.md`, `GEMINI.md`, `.agents/rules/spanner-graph-workshop.md`, `starter/README.md`, and `docs/00..08.md` for link integrity and spec alignment.
+6. `tests/test_starter_vs_solution_parity.py`: Verifies all 15 `starter/` files fail `--track starter --lab 1..8` (and `MODE=express`), zero header `TODO` traps, `1e6`/`1000000` parity, and `--track solution --lab all` passes.
+7. `tests/test_docs_consistency.py`: Checks `README.md`, `WORKSHOP_CONTENT_PLAN.md`, `GEMINI.md`, `.agents/rules/spanner-graph-workshop.md`, `starter/README.md`, and `docs/00..08.md` for link integrity and 16-target spec alignment.
+8. `tests/test_zero_docker_and_ops_scripts.py`: Tests `no_docker_neo4j_sim.py`, `scripts/run_live_sql.py --dry-run`, `scripts/preflight_check.sh`, `scripts/verify_zero_residual.sh --dry-run`, and `iam_and_model_armor_setup.sh --cleanup --dry-run`.
 
-## 4. Live Bangkok GCP Workshop Lifecycle (Confirm Every Mutating Step)
+## 4. Live Bangkok GCP Workshop Lifecycle & Verified Timings (Confirm Every Mutating Step)
+
+### Live-Verified Bangkok (`asia-southeast3`) + Singapore (`asia-southeast1`) Execution Timings
+
+| Stage | Live Command / Component | Verified Timing (100 PU) | Facilitator / Operational Tip |
+| :--- | :--- | :---: | :--- |
+| **Base DDL Create** | `provision_workshop_env.sh create` (`01`/`02`/`04`) | **~2 min** | Non-parent `INTERLEAVE IN Apis` on `ServiceCallsApi` reverse index verified live |
+| **Path A + Dynamic Load** | `neo4j_to_spanner_loader.py` (68 nodes, 174 explicit edges) | **< 5 s** | `domain_key = node_id` (no label prefix) so Hero Query C matches `@api_id` |
+| **Path B + SG Embeddings** | `unstructured_graphrag_ingest.py` (45 docs, 152 × 768-dim) | **~22 s** | Calls Singapore `asia-southeast1` `gemini-embedding-001` (~25 ms RTT) |
+| **4-Stage Post-Load** | `apply-postload` (20 indexes + 5 FTS + ScaNN + `ANALYZE`) | **~10 min** | **Start right before the morning break** (or use `300` PU during live demos) |
+| **Hero & SQL/GQL Queries** | Hero A/B/C (7-row fixture) + Labs `04b`/`05`/`06`/`09`/`10`/`11` | **33–520 ms** | ScaNN `PLAN` confirms `VectorIndexScan`; FGAC `sdlc_readonly_role` ALLOW/DENY |
+| **Data Boost Graph Algos** | Lab 4 `08_graph_algorithms_criticality.sql` (`PageRank`, `WCC`, `ShortestPath`) | **~3 min** (all 3) | Requires caller `roles/spanner.graphIntelligenceUser` + Spanner SA write-back IAM |
+| **Lab 6 Full Deployment** | 3 BKK Cloud Run MCP + 3 Secrets + 7 SAs + FGAC + SG DLP/Model Armor | **~3–4 min** | Verified with Toolbox `v1.13.1` over OIDC-authenticated `/mcp` JSON-RPC 2.0 |
+| **Lab 8 Cross-Region DR** | `provision_workshop_env.sh backup-to-singapore` | **~35–40 min** (`100` PU: ~22m + ~18m) | Run async/facilitator demo; follow with `make cleanup-all-gcp` + `verify_zero_residual.sh` guaranteed teardown |
+
+> **Clean CLI Setup Tip:** Run `gcloud auth application-default set-quota-project "$GOOGLE_CLOUD_PROJECT"` and export `SPANNER_DISABLE_BUILTIN_METRICS=true` before running Python scripts to keep terminal output crisp and avoid ADC quota warnings.
 
 ```bash
 # 1. Copy .env.example -> .env and confirm active GCP project (never commit .env!)
 cp .env.example .env
+gcloud auth application-default set-quota-project "$GOOGLE_CLOUD_PROJECT"
+export SPANNER_DISABLE_BUILTIN_METRICS=true
 # Expected defaults:
 #   GOOGLE_CLOUD_REGION=asia-southeast3   VERTEX_AI_LOCATION=asia-southeast1
 #   SPANNER_INSTANCE=sdlc-kg-enterprise   SPANNER_DATABASE=sdlc_knowledge_graph
@@ -244,6 +268,16 @@ LIMIT 50;
 | 13 | `make cleanup-gcp` fails to delete `sdlc-kg-enterprise` | Existing Singapore backup copies, automatic backup schedule, or `--enable-drop-protection` | Delete all backups on the instance first, disable drop protection if enabled, then re-run `scripts/provision_workshop_env.sh cleanup` |
 | 14 | Quota exceeded creating instance in `asia-southeast3` (Bangkok) | Customer GCP project lacks `asia-southeast3` Spanner quota | Switch `.env` to `GOOGLE_CLOUD_REGION=asia-southeast1` (Singapore fallback; `100` PU × 8 hr = `$1.1257` compute) |
 | 15 | Lab 8 `LOCK_STATS_TOP_HOUR` wait times look 1,000,000x too high | `SPANNER_SYS.LOCK_WAIT_DISTRIBUTION` stores durations in **microseconds**, not seconds | Divide `SPANNER_SYS.DISTRIBUTION_PERCENTILE(...)` output by `1000000.0` to display seconds |
+| 16 | DDL error `JSON derived TOKENLIST column metadata_tokens may not be STORED` | `TOKENIZE_JSON(...)` generated `TOKENLIST` columns cannot be `STORED` in Cloud Spanner | Declare `metadata_tokens TOKENLIST AS (TOKENIZE_JSON(metadata)) HIDDEN` (virtual `HIDDEN`, never `STORED HIDDEN`) |
+| 17 | SQL syntax error on multi-line `JSON '{ ... }'` in `03a_seed_synonyms_and_metadata.sql` | Single-quoted string literals cannot span multiple lines in GoogleSQL DML | Wrap multi-line JSON literals in triple quotes (`JSON '''{ ... }'''`) |
+| 18 | GQL compile error on `VALUE { MATCH ... RETURN COUNT(*) }` in Translation 8 (`09`) | Spanner ISO GQL requires an explicit `AS` alias on computed expressions even inside scalar `VALUE {}` subqueries | Add explicit alias: `VALUE { MATCH (inner_s:Service)<-[:DEPENDS_ON]-(:Service) WHERE inner_s = s RETURN COUNT(*) AS cnt }` |
+| 19 | Data Boost Graph Algo fails `PERMISSION_DENIED` (even as project Owner!) or write-back fails | `roles/owner` omits `spanner.databases.useDataBoost`; Spanner SA needs DB write-back IAM for `format = 'CLOUD_SPANNER'` | Grant caller `roles/spanner.graphIntelligenceUser`, AND grant `service-<PROJECT_NUMBER>@gcp-sa-spanner.iam.gserviceaccount.com` database-level `roles/spanner.databaseUser` + `roles/spanner.graphIntelligenceUser` |
+| 20 | Data Boost `ShortestPath` fails compilation, or `fallback_region` / table already exists errors | `ShortestPath` requires every yielded node (`source_node` AND `target_node`) in `RETURN`; fallback param is `fallback_compute_region` | Use `CREATE TABLE IF NOT EXISTS ServiceAlgoProperty` with `target_service_id`, return `target_node.service_id AS target_service_id`, and use `fallback_compute_region => '<region>'` |
+| 21 | Exact KNN Hero Query A (`07`) fails plan compilation with `@{scan_method=batch}` | `@{scan_method=batch}` is unsupported on the right side of apply/merge/hash joins | Keep `@{scan_method=batch}` on standalone Exact KNN benchmarks (`05`), and omit it on joined CTEs like `vec_top` in `07` |
+| 22 | RSF Query 2 (`06`) or MCP Toolbox hybrid search fails on `SCORE()` in a multi-referenced CTE | Referencing an FTS `SCORE()` CTE multiple times (e.g., `FULL OUTER JOIN` + bounds CTE) requires optimizer version `>= 6` | Prefix the query with `@{optimizer_version=latest}` (verified in `06_hybrid_rrf_rsf_filtered.sql` and `tools.yaml`) |
+| 23 | `ML.PREDICT` returns 3072-dim vector instead of 768-dim (`gemini-embedding-001`) | `gemini-embedding-001` defaults to `3072` dimensions unless Matryoshka dimensionality is requested | Pass `STRUCT(768 AS outputDimensionality)` as the 3rd `params` argument to `ML.PREDICT` / `SAFE.ML.PREDICT` |
+| 24 | MCP Toolbox `v1.13.1+` returns `HTTP 410 Gone` on `/api/toolset` or `/api/tool/.../invoke` | Legacy `/api/*` REST routes are disabled by default in Toolbox `v1.13.1+` | Call Streamable HTTP JSON-RPC 2.0 on `/mcp` or `/mcp/<toolset>` (`initialize`, `tools/list`, `tools/call`) |
+| 25 | MCP SQL tool fails `Unimplemented: Unsupported query shape: null-valued array of struct` (or SA IAM race / Hero Query C empty) | Nullable `(SELECT ARRAY_AGG(...) FROM ...)` scalar subquery; newly created SA takes 3–8s to propagate; `domain_key` prefixed | Use non-null `ARRAY(SELECT AS STRUCT ...)` in `tools.yaml`; retry `gcloud spanner databases add-iam-policy-binding` 3–8s after SA creation (and match `could not be found` on `gcloud run services delete`); store `domain_key = node_id` (no label prefix) in `neo4j_to_spanner_loader.py` |
 
 ## 6. Common Workshop Anti-Patterns (Never Do These)
 

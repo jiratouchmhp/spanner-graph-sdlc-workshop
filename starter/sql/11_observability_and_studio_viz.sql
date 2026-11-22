@@ -47,7 +47,7 @@
 --       `LOCK_WAIT_DISTRIBUTION` buckets are stored in MICROSECONDS!
 --     - Guard against empty buckets (`LOCK_WAIT_DISTRIBUTION[SAFE_OFFSET(0)].COUNT > 0`)
 --       and divide `SPANNER_SYS.DISTRIBUTION_PERCENTILE(LOCK_WAIT_DISTRIBUTION[SAFE_OFFSET(0)], 99.0)`
---       by one million (`1e6`) to report `p99_lock_wait_secs` accurately!
+--       by one million (`1000000.0`; `1e6` is also valid in GoogleSQL) to report `p99_lock_wait_secs` accurately!
 --     - Include `CAST(ROW_RANGE_START_KEY AS STRING)`, `LOCK_WAIT_SECONDS`,
 --       and `SAMPLE_LOCK_REQUESTS`; order by `LOCK_WAIT_SECONDS DESC LIMIT 20`.
 

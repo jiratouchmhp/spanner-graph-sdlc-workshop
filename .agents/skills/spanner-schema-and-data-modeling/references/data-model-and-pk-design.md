@@ -258,7 +258,7 @@ CREATE TABLE access_logs (
 | Timestamp | `TIMESTAMP` | `timestamptz` | Yes (both) | PG **`TIMESTAMP WITHOUT TIME ZONE` unsupported**; forbid `now`/`epoch`/`infinity` literals; avoid TZ abbrevs (`PST`/`IST`)—use IANA names (e.g., `Asia/Bangkok`, `Asia/Singapore`). Default PG TZ for `date_trunc` is `America/Los_Angeles`. |
 | Commit TS | `TIMESTAMP OPTIONS (allow_commit_timestamp=true)` | `spanner.commit_timestamp` | PK/Index Yes; **FK NO** | Supports PG `DEFAULT` & `ON UPDATE spanner.pending_commit_timestamp()`. |
 | UUID | `UUID` | `uuid` | Yes (both) | 128-bit value. Cannot `ALTER COLUMN` between `STRING(36)` and `UUID`. |
-| JSON | `JSON` | `jsonb` | **NO (both)** | Index JSON fields via expression indexes or generated columns. |
+| JSON | `JSON` | `jsonb` | **NO (both)** | Index JSON fields via expression indexes, generated columns, or virtual `HIDDEN` `TOKENIZE_JSON(...)` (never `STORED`). In GoogleSQL DML, multi-line JSON string literals **MUST** use triple quotes (`JSON '''{ ... }'''`) — single quotes spanning lines fail parsing. |
 | Array / Vector | `ARRAY<T>` | `T[]` / `T ARRAY` | **NO (both)** | PG: 1D only, lower bound 1, declared length (`int[3]`) unenforced. Vector length annotations (`N >= 0`): GoogleSQL `ARRAY<FLOAT32>(vector_length=>N)` (**recommended**) or `FLOAT64`; PG `float4[] VECTOR LENGTH N` (`real[]`, **recommended** for ScaNN/KNN) or `float8[]`. Empty array `!= NULL`. |
 | Interval | `INTERVAL` | `interval` | **N/A (PG query-only)** | PG cannot store in table columns (expressions/views only); ISO 8601 output; bounds ±120,000 mo / ±3,660,000 d. |
 | Proto / Enum / Struct | `PROTO` / `ENUM` / `STRUCT` | GoogleSQL only | `ENUM`: Yes; others **NO** | `PROTO BUNDLE` max **`5 MiB`** (recommended **`500 KiB`**). |

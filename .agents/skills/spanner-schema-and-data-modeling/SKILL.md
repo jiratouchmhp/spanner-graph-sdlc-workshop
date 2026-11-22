@@ -25,6 +25,7 @@ Authoritative production blueprint for Cloud Spanner relational data modeling ac
 8. **Edition Gate for Storage Tiering & Compaction:** **Locality Groups**, **Tiered Storage (SSD/HDD)**, and **Manual Major Compaction (`compact_all()`)** require **Cloud Spanner Enterprise or Enterprise Plus** (unavailable on Standard).
 9. **Backup restores automatically drop all TTL policies:** Re-apply `ROW DELETION POLICY` (GoogleSQL) / `TTL INTERVAL` (PostgreSQL) after every restore, and ensure all interleaved children and referencing FKs on a TTL-enabled table use `ON DELETE CASCADE`.
 10. **Keep insert-heavy tables and `UNIQUE`/high-write indexes on SSD-only locality groups:** Every `INSERT` checks row-existence metadata in the table's locality group; offload only large cold payload columns (blobs, archives) to HDD or age-based spill.
+11. **`TOKENIZE_JSON` must be virtual `HIDDEN`, and multi-line JSON DML requires triple quotes:** Never mark a `TOKENIZE_JSON(...)` generated `TOKENLIST` column `STORED` (Spanner rejects `JSON derived TOKENLIST column ... may not be STORED`); always declare it virtual `HIDDEN`. In GoogleSQL DML, multi-line JSON literals must use triple quotes (`JSON '''{ ... }'''`), never single quotes spanning lines. Non-parent `INTERLEAVE IN {TargetTable}` is supported on covering reverse indexes for graph/relationship lookup locality.
 
 ## Reference Modules (Load On Demand)
 
