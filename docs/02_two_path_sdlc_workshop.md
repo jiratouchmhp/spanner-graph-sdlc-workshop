@@ -79,15 +79,16 @@ Every participant should recognize these **5 deliberate topological test traps**
 
 ---
 
-## 3. Bangkok Primary + Singapore Secondary Regional Topology
+## 3. Bangkok Single-Region Core + Singapore Companion AI & Security Topology
+
+All database, application, secret, and storage resources run strictly in **Bangkok (`asia-southeast3` / `regional-asia-southeast3`)** — there is **no** second Singapore Spanner DR instance and **no** cross-region Spanner backup copy in this workshop. **Singapore (`asia-southeast1`, `~25 ms` RTT)** serves strictly as a companion region **only** for GCP services unavailable in Bangkok:
 
 | Design Choice | Locked Configuration | Rationale |
 | :--- | :--- | :--- |
-| **Primary Spanner & Cloud Run** | **Bangkok (`asia-southeast3` / `regional-asia-southeast3`)** | 3-zone synchronous quorum (`a/b/c`), **99.99% SLA**, Thailand PDPA primary residency (`REQ-007`), `$0.00/GiB` intra-region replication, `1.05x` US pricing (`$1.2915/node-hr` Enterprise). |
-| **Vertex AI Embeddings & LLM** | **Singapore (`asia-southeast1`, `~25 ms` RTT)** | Regional `gemini-embedding-001` (768-dim `FLOAT32`) & `gemini-2.5-flash`. **Never** target `global` for `gemini-embedding-001` (`INV-09`). |
-| **Disaster Recovery (DR)** | **Cross-region backup copy to `regional-asia-southeast1`** | Cloud Spanner has no pre-built Bangkok+Singapore dual-region config; cross-region backup copy costs `$0.08/GiB` egress + `$0.03432/GiB-mo` DR backup storage (`REQ-014`). |
-| **Model Armor Guardrails** | **`modelarmor.asia-southeast1.rep.googleapis.com`** | Screens RAI, SDP, and prompt injection; document cross-jurisdictional prompt transit for Thailand PDPA reviews. |
-| **Workshop Quota Fallback** | `--region asia-southeast1` | One-flag fallback if a workshop sandbox project lacks quota in `asia-southeast3` (`100` PU × 8 hr = `$1.1257` compute). |
+| **Primary & Only Database / App Region** | **Bangkok (`asia-southeast3` / `regional-asia-southeast3`)** | Single Cloud Spanner Enterprise regional instance (3-zone synchronous quorum `a/b/c`, **99.99% SLA**, Thailand PDPA residency `REQ-007`, `$0.00/GiB` intra-region replication, `1.05x` US pricing `$1.2915/node-hr`), plus Cloud Run MCP Toolbox, user-managed Secret Manager, GCS staging & Dataflow. |
+| **Backups & Point-in-Time Recovery** | **Same-region Bangkok (`regional-asia-southeast3`)** | Production uses 7-day PITR + same-region Bangkok `AUTOMATIC` backup schedules (`$0.0315/GiB-mo`, `$0` cross-region DR egress); workshop sandbox uses `--default-backup-schedule-type=NONE` for clean teardown. |
+| **Companion Vertex AI *(Unavailable in Bangkok)*** | **Singapore (`asia-southeast1`, `~25 ms` RTT)** | Regional `gemini-embedding-001` (768-dim `FLOAT32`) & `gemini-2.5-flash`. **Never** target `global` for `gemini-embedding-001` (`INV-09`). |
+| **Companion Model Armor & Cloud DLP *(Unavailable in Bangkok)*** | **Singapore (`asia-southeast1`, `~25 ms` RTT)** | `modelarmor.asia-southeast1.rep.googleapis.com` + companion Cloud DLP inspection template screening RAI, PII/PCI, and prompt injection; document cross-jurisdictional prompt transit for Thailand PDPA reviews. |
 
 ### Optional Live Provisioning Step (Track B)
 
@@ -103,7 +104,6 @@ bash scripts/provision_workshop_env.sh create --dry-run
 
 # Provision live Bangkok 100-PU Enterprise sandbox (--default-backup-schedule-type=NONE)
 make provision-gcp
-# Or Singapore quota fallback: make provision-gcp REGION=asia-southeast1
 ```
 
 ---

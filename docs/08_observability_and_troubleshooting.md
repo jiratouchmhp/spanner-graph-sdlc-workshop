@@ -1,6 +1,6 @@
-# Module 8: Observability, Spanner Studio Visualizations, Pre-Splitting, DR & Teardown
+# Module 8: Observability, Spanner Studio Visualizations, Pre-Splitting & Teardown
 
-**Customer Requirement 7 (Operational Excellence Capstone):** Master day-2 **Cloud Spanner Enterprise** operations — interactive **Spanner Studio** graph visualizations, `SPANNER_SYS` Query/Lock/Active-Query introspection, Execution Plan profiling, **Key Visualizer** hotspot diagnosis, **Pre-Splitting**, Emulator vs. Enterprise boundaries, Singapore cross-region DR backup copy, and clean workshop teardown.
+**Customer Requirement 7 (Operational Excellence Capstone):** Master day-2 **Cloud Spanner Enterprise** operations in **Bangkok (`regional-asia-southeast3`)** — interactive **Spanner Studio** graph visualizations, `SPANNER_SYS` Query/Lock/Active-Query introspection, Execution Plan profiling, **Key Visualizer** hotspot diagnosis, **Pre-Splitting**, Emulator vs. Enterprise boundaries, production same-region Bangkok PITR/backup schedules, live verification, and guaranteed zero-residual workshop teardown.
 
 - **Duration:** Track A (4h Express): `15 min` | Track B (8h Deep-Dive): `30 min`
 - **Primary Antigravity Skills:** [`spanner-performance-observability-and-sizing`](../.agents/skills/spanner-performance-observability-and-sizing/SKILL.md), [`spanner-graph-modeling-and-gql`](../.agents/skills/spanner-graph-modeling-and-gql/SKILL.md), [`spanner-enterprise-platform-ops`](../.agents/skills/spanner-enterprise-platform-ops/SKILL.md)
@@ -76,36 +76,50 @@ Knowing exactly what the free local Emulator skips prevents wasted debugging hou
 | **Data Boost Graph Algorithms (`PageRank`, `WCC`, `ShortestPath`)** | Unsupported | **Serverless Isolated Data Boost Execution** |
 | **FGAC Roles, IAM Enforcement & `SECURE_CONTEXT()`** | **Skipped (all queries allowed!)** | **Strict Enforced SQL RBAC + Conditional IAM** |
 | **`PLAN` / `PROFILE` Stats, `ANALYZE`, `SPANNER_SYS`, Key Visualizer** | Empty / no-op | **Full Optimizer Stats, Insights & Heatmaps** |
-| **Locality Groups (SSD→HDD), TTL Sweeper, PITR & Backups** | No-op | **Full Tiering, 7-Day PITR & Cross-Region DR** |
+| **Locality Groups (SSD→HDD), TTL Sweeper, PITR & Backups** | No-op | **Full Tiering, 7-Day PITR & Same-Region Bangkok Backups** |
 
 ---
 
-## 5. Live End-to-End Verification, Singapore DR Backup Copy & Teardown
+## 5. Production Same-Region Bangkok PITR/Backups, Live Verification & Guaranteed Zero-Residual Teardown
 
-### Step 1: Run the 5-Check Live GCP Verification Suite
+### Step 1: Production Same-Region Bangkok PITR & Backup Schedules (Overview — Single-Region Only)
+
+In this strict Bangkok single-region architecture (**no** 2-region Singapore Spanner DR instance), production instances (`>= 1,000` PU in `regional-asia-southeast3`) combine **3-zone synchronous quorum** (`99.99%` SLA) with two built-in same-region data protection controls — keeping 100% of backups Thailand PDPA resident with **`$0` cross-region egress**:
+
+- **7-Day Point-in-Time Recovery (PITR):** Configure `version_retention_period` up to `7d` so operators can execute stale reads (`AS OF SYSTEM TIME`) or recover accidentally overwritten rows directly inside Bangkok:
+  ```sql
+  ALTER DATABASE sdlc_knowledge_graph
+  SET OPTIONS (version_retention_period = '7d');
+  ```
+- **Same-Region Bangkok `AUTOMATIC` Backup Schedules:** Production instances keep `--default-backup-schedule-type=AUTOMATIC` (`$0.0315/GiB-mo` in `regional-asia-southeast3`) and `--enable-drop-protection`. *(Our `100` PU workshop sandbox uses `--default-backup-schedule-type=NONE` specifically so teardown completes in seconds.)*
+- **Restore Reminder:** Cloud Spanner backups preserve SQL FGAC roles and `GRANT` statements inside the schema, but do **not** include GCP IAM bindings — always re-apply Step 3 of `solution/mcp/iam_and_model_armor_setup.sh` after restoring a database in Bangkok.
+
+### Step 2: Live Verification (`verify_live_gcp.sh`) & Guaranteed Zero-Residual Teardown (`make cleanup-all-gcp`)
+
+First run the live Bangkok verification suite to confirm every layer is healthy end-to-end:
+
 ```bash
-# Preview checks safely first (or run live against your Bangkok sandbox)
+# Preview checks safely first, then run live against your Bangkok sandbox
 make verify-live DRY_RUN=1
 make verify-live
 ```
-This verifies: (1) DDL describe, (2) ScaNN `PLAN`, (3) live Hero Query B 7-row fixture parity, (4) `sdlc_readonly_role` ALLOW on `PublicApiCatalogView` and DENY on `Owners.clearance_tier` / `INSERT INTO Adrs`, and (5) cross-region backup DR status.
 
-### Step 2: Optional Cross-Region Backup DR Copy (Bangkok → Singapore, `~35–40 min` on 100 PU)
-```bash
-# Preview or execute cross-region backup copy ($0.08/GiB Asia egress + $0.03432/GiB-mo SG storage)
-bash scripts/provision_workshop_env.sh backup-to-singapore --dry-run
-bash scripts/provision_workshop_env.sh backup-to-singapore
-```
-> **DR Restore Reminder:** Cloud Spanner backups preserve SQL FGAC roles and `GRANT` statements inside the schema, but do **not** include GCP IAM bindings. Always re-apply Step 3 of `solution/mcp/iam_and_model_armor_setup.sh` after restoring to Singapore.
+`scripts/verify_live_gcp.sh` verifies: (1) DDL describe (`SdlcGraph`, `DocumentChunks`, `IdxDocumentChunksEmbedding`, `SdlcSynonymDict`, `PublicApiCatalogView`), (2) ScaNN `PLAN` (`VectorIndexScan`), (3) live Hero Query B 7-row fixture parity, and (4) `sdlc_readonly_role` ALLOW on `PublicApiCatalogView` and DENY on `Owners.clearance_tier` / `INSERT INTO Adrs`.
 
-### Step 3: Guaranteed Zero-Residual Workshop Teardown (Confirm Active Project First!)
+Once verification passes, run guaranteed zero-residual teardown (**confirm active project first!**):
+
 ```bash
 # Confirm you are deleting ONLY your workshop sandbox project!
 gcloud config get-value project
 
-# Full teardown (Cloud Run MCP, Secrets, all 7 SAs, DLP/Model Armor, GCS, Spanner) + guaranteed verify_zero_residual.sh audit
+# Full teardown (~2 min): removes Bangkok Cloud Run MCP, user-managed Secrets, all 7 SAs,
+# GCS staging bucket, Bangkok Spanner instance/same-region backups, plus Singapore (asia-southeast1)
+# companion DLP/Model Armor templates — then runs verify_zero_residual.sh!
 make cleanup-all-gcp
-# Or Spanner-only teardown: make cleanup-gcp
+
+# Or Spanner-only teardown (Bangkok instance & same-region backups):
+make cleanup-gcp
+
 # Preview or re-run the 6-category zero-residual audit anytime:
 bash scripts/verify_zero_residual.sh --dry-run
 

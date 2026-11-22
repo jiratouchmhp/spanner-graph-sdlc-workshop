@@ -84,7 +84,7 @@ python3 labs/run_hero_query.py \
 # 3. Emit executable SQL for pasting into Spanner Studio
 python3 labs/run_hero_query.py --query B --emit-sql
 
-# 4. Live execution against Bangkok Cloud Spanner (asia-southeast3) + Singapore Vertex AI (asia-southeast1)
+# 4. Live execution against Bangkok Cloud Spanner (asia-southeast3, sole DB region) + Singapore companion Vertex AI (asia-southeast1)
 python3 labs/run_hero_query.py \
   --query B \
   --api-id api-payments-charge-v2 \

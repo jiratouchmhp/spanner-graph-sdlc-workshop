@@ -30,13 +30,16 @@
 #     roles so callers can NEVER bypass FGAC by omitting `database_role`.
 #
 # REGIONAL TOPOLOGY & THAILAND PDPA NOTICE:
-#   - Primary Region (Bangkok): `asia-southeast3` (`regional-asia-southeast3`)
-#     Hosts Cloud Spanner Enterprise (3-zone sync quorum, 99.99% SLA, Thailand
-#     PDPA residency) and all 3 isolated Cloud Run MCP Toolbox services.
-#   - Secondary / AI & DR Region (Singapore): `asia-southeast1` (~25 ms RTT)
-#     Hosts Vertex AI (`gemini-embedding-001`, `gemini-2.5-flash`), Model Armor
-#     regional template (`modelarmor.asia-southeast1.rep.googleapis.com`),
-#     Cloud DLP inspect templates, and optional cross-region DR backup copies.
+#   - Primary & ONLY Database/App Region (Bangkok): `asia-southeast3`
+#     (`regional-asia-southeast3`) — hosts Cloud Spanner Enterprise (3-zone
+#     synchronous quorum, 99.99% SLA, Thailand PDPA residency, same-region
+#     backups/PITR only), all 3 isolated Cloud Run MCP Toolbox services, and
+#     user-managed Secret Manager secrets.
+#   - Companion AI/Security Region (Singapore): `asia-southeast1` (~25 ms RTT)
+#     Used ONLY for GCP services unavailable in Bangkok: Vertex AI
+#     (`gemini-embedding-001`, `gemini-2.5-flash`), Model Armor regional
+#     template (`modelarmor.asia-southeast1.rep.googleapis.com`), and Cloud DLP
+#     inspect templates.
 #   - PDPA Notice: Model Armor is NOT currently available in `asia-southeast3`.
 #     Routing prompts/responses to `asia-southeast1` crosses the Thailand border;
 #     document cross-jurisdictional transit approval in PDPA compliance reviews.
@@ -116,7 +119,6 @@ AUTO_APPROVE="false"
 
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-${SPANNER_PROJECT:-}}"
 REGION="${GOOGLE_CLOUD_REGION:-${SPANNER_REGION:-asia-southeast3}}"
-DR_REGION="${GOOGLE_CLOUD_SECONDARY_REGION:-asia-southeast1}"
 VERTEX_AI_LOCATION="${VERTEX_AI_LOCATION:-${VERTEX_AI_EMBEDDING_LOCATION:-asia-southeast1}}"
 MODEL_ARMOR_LOCATION="${MODEL_ARMOR_LOCATION:-asia-southeast1}"
 SPANNER_INSTANCE="${SPANNER_INSTANCE:-sdlc-kg-enterprise}"
@@ -587,8 +589,8 @@ upsert_secret_from_file() {
 echo "==========================================================================="
 echo "Module 6 Security & MCP Toolbox Setup"
 echo "  Project ID           : ${PROJECT_ID}"
-echo "  Primary Region       : ${REGION} (Bangkok — Spanner + Cloud Run MCP Toolbox)"
-echo "  Secondary / AI / DR  : ${DR_REGION} (Singapore — Vertex AI + Model Armor + DR)"
+echo "  Primary Region       : ${REGION} (Bangkok — Spanner + Cloud Run MCP Toolbox + Secrets)"
+echo "  Companion AI/Sec     : ${MODEL_ARMOR_LOCATION} (Singapore — Vertex AI + Model Armor + DLP, unavailable in Bangkok)"
 echo "  Spanner Target       : ${SPANNER_INSTANCE}/${SPANNER_DATABASE}"
 echo "  Service / Secret Pfx : ${SERVICE_PREFIX}-* / ${SECRET_PREFIX}-*"
 echo "  Dry-Run Mode         : ${DRY_RUN}"
@@ -734,18 +736,6 @@ deploy_persona_service() {
 deploy_persona_service "impact-analyst" "sa-impact-analyst"
 deploy_persona_service "adr-curator" "sa-adr-curator"
 deploy_persona_service "security-auditor" "sa-security-auditor"
-
-# -----------------------------------------------------------------------------
-# Optional DR Notes for Singapore (asia-southeast1):
-#   Cloud Spanner has no pre-built Bangkok + Singapore dual-region config.
-#   For regional DR failover to Singapore (regional-asia-southeast1):
-#     1. Copy Bangkok backups to Singapore via `gcloud spanner backups copy`
-#        ($0.08/GiB Asia cross-region egress + $0.03432/GiB-mo Singapore backup).
-#     2. Re-run this script with GOOGLE_CLOUD_REGION=asia-southeast1 pointing at
-#        the restored Singapore DR instance (regional-asia-southeast1, $1.40712/node-hr).
-#     3. CRITICAL: Spanner backups preserve SQL FGAC roles/grants, but do NOT
-#        include IAM policies — always re-run Step 3 below after restoring!
-# -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
 # Step 3: Layer 2 — Provision Dedicated Spanner FGAC Service Accounts

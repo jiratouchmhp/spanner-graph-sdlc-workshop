@@ -197,12 +197,12 @@ curl -sS -X POST https://spanner.googleapis.com/mcp \
 
 ## 5. Production Cloud Run Deployment & Hardening
 
-Co-locate Cloud Run MCP Toolbox in the same region as your primary Spanner instance (e.g., Bangkok `asia-southeast3`) for minimal round-trip latency and PDPA data locality, while calling Vertex AI embeddings in `asia-southeast1` (~25 ms RTT). Deploy **one Cloud Run service per agent persona** with its own sliced `tools.yaml` and dedicated Service Account:
+Co-locate Cloud Run MCP Toolbox and user-managed Secret Manager secrets in the same primary region as your single-region Spanner instance (e.g., Bangkok `asia-southeast3`) for minimal round-trip latency and PDPA data locality, while calling companion GCP services unavailable in Bangkok—Vertex AI embeddings/LLMs, Model Armor, and Cloud DLP—in `asia-southeast1` (~25 ms RTT). Deploy **one Cloud Run service per agent persona** with its own sliced `tools.yaml` and dedicated Service Account:
 
 ```bash
 export PROJECT_ID="{project_id}"
-export REGION="asia-southeast3"          # Co-locate with Spanner primary (or asia-southeast1)
-export VERTEX_REGION="asia-southeast1"   # Regional Vertex AI endpoint (never global)
+export REGION="asia-southeast3"          # Single primary DB/App region (Bangkok)
+export VERTEX_REGION="asia-southeast1"   # Companion region for Vertex AI (unavailable in Bangkok; never global)
 export IMAGE="us-central1-docker.pkg.dev/database-toolbox/toolbox/toolbox:latest" # Pin digest in prod!
 
 # 1. Create dedicated least-privilege runtime SA for this read-only persona
@@ -221,8 +221,11 @@ gcloud spanner databases add-iam-policy-binding "{database_id}" \
   --member="serviceAccount:toolbox-ro-persona@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role="roles/spanner.databaseReader"
 
-# 3. Store sliced persona tools.yaml in Secret Manager (never bake into image)
-gcloud secrets create tools-ro-persona --data-file=tools.ro-persona.yaml
+# 3. Store sliced persona tools.yaml in regional user-managed Secret Manager (never bake into image)
+gcloud secrets create tools-ro-persona \
+  --replication-policy="user-managed" \
+  --locations="$REGION" \
+  --data-file=tools.ro-persona.yaml
 
 # 4. Initial deploy to obtain deterministic Cloud Run URL (MUST bind 0.0.0.0:8080!)
 gcloud run deploy toolbox-ro-persona \

@@ -73,7 +73,7 @@ Spanner SQL views are **virtual (non-materialized)** and **read-only**: Spanner 
 CREATE OR REPLACE FUNCTION {remote_fn_name}(x INT64)
   RETURNS INT64 NOT DETERMINISTIC LANGUAGE REMOTE
   OPTIONS (
-    endpoint = 'https://asia-southeast1-{project_id}.cloudfunctions.net/{function_name}',
+    endpoint = 'https://asia-southeast3-{project_id}.cloudfunctions.net/{function_name}',
     max_batching_rows = 100  -- Optional; Spanner auto-batches when omitted
   );
 ```
@@ -239,7 +239,7 @@ CREATE INDEX Idx_{graph_node_table}_Label ON {graph_node_table} (label);
 
 The `langchain-google-spanner` Python package provides five components: `SpannerVectorStore`, `SpannerLoader` / `SpannerDocumentSaver`, `SpannerChatMessageHistory`, **`SpannerGraphStore`** (persists LLM-extracted nodes/edges via `LLMGraphTransformer` and executes ISO GQL), and **`SpannerGraphQAChain`** (NL -> ISO GQL -> Spanner execution -> grounded answer).
 
-**Regional Data-Residency Example (Bangkok + Singapore)**: Host the Cloud Spanner Enterprise database (`SpannerGraphStore` + `SpannerVectorStore`) in `regional-asia-southeast3` (Bangkok) for Thailand PDPA data residency, and configure regional Vertex AI endpoints (`gemini-embedding-001` and `gemini-2.5-flash`) in `asia-southeast1` (Singapore, ~25 ms RTT; `global` fallback applies only to LLM synthesis, never regional text-embedding endpoints).
+**Regional Data-Residency Example (Bangkok Primary + Singapore Companion)**: Host the single-region Cloud Spanner Enterprise database (`SpannerGraphStore` + `SpannerVectorStore`), Cloud Run services, user-managed Secret Manager, and same-region PITR/backups in `regional-asia-southeast3` (Bangkok) for Thailand PDPA data residency, and call `asia-southeast1` (Singapore, ~25 ms RTT) **only** for companion GCP services unavailable in Bangkok (Vertex AI `gemini-embedding-001` & `gemini-2.5-flash`, Model Armor, Cloud DLP; `global` fallback applies only to LLM synthesis, never regional text-embedding endpoints).
 
 ---
 

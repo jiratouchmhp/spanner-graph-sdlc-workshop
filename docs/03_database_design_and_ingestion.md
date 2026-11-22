@@ -78,7 +78,9 @@ Step 4: Post-Load Orchestrator (`apply_postload.py`):
   Omit manual `tree_depth`/`num_leaves` so Cloud Spanner Enterprise auto-tunes ScaNN partitions, and keep `STORING` compact (never store huge `content` blobs inside the vector index). In `03d_backfill_embeddings_pdml.sql`, always pass `STRUCT(768 AS outputDimensionality)` as the 3rd argument to `SAFE.ML.PREDICT` (otherwise `gemini-embedding-001` defaults to `3072` dimensions).
 - **Live-Verified Bangkok (`100` PU) Timings:** Base DDL create **~2 min**, Path A + `SdlcDynamicGraph` load **<5s** (`domain_key = node_id`, no label prefix, so Hero Query C matches `@api_id`), Path B + 152 Singapore Vertex AI embeddings **~22s**, and 4-stage `apply-postload` (20 indexes + 5 FTS + ScaNN + `ANALYZE`) **~10 min** (*tip: kick off `apply-postload` right before the morning break, or temporarily use `300` PU during live demos*).
 
-### Running Pipelines Offline (`--dry-run`) and Live (Bangkok + Singapore)
+### Running Pipelines Offline (`--dry-run`) and Live (Bangkok Spanner + Singapore Companion Vertex AI)
+
+All Cloud Spanner Enterprise tables, Cloud Storage staging buckets, and Dataflow pipelines stay strictly in **Bangkok (`asia-southeast3`)**; **Singapore (`asia-southeast1`, `~25 ms` RTT)** is called **only** for Vertex AI `gemini-embedding-001` (unavailable in Bangkok):
 
 ```bash
 # Offline zero-dependency validation of all Path A/B loaders + 4-stage post-load

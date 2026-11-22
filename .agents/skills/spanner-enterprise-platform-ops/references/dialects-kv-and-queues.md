@@ -74,7 +74,7 @@ FROM UNNEST(ARRAY(
 For workloads requiring true `RANK()`, `DENSE_RANK()`, `LAG()`, `LEAD()`, or running window sums over live Spanner data, execute the window function in BigQuery via `EXTERNAL_QUERY` (enable **Spanner Data Boost** + parallel reads on the BigQuery connection, requiring `roles/bigquery.connectionUser` + Spanner reader roles; or use a BigQuery Spanner external dataset, which requires `roles/spanner.databaseReaderWithDataBoost`):
 
 ```sql
--- Execute in BigQuery against a Cloud Spanner connection (e.g., asia-southeast3 / asia-southeast1)
+-- Execute in BigQuery against a Cloud Spanner connection (e.g., asia-southeast3)
 SELECT
   c.customer_id,
   c.region_code,

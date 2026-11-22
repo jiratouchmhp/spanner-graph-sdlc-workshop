@@ -51,9 +51,9 @@ Before executing any command or DDL/DML against a live remote environment:
 6. **Elasticsearch -> Spanner FTS Traps:**
    - Always pass **`enablePartialRowUpdates=true`** on the Spark Spanner connector; omitting it attempts to write hidden generated `TOKENLIST` columns and fails immediately.
    - Use **`fulltext_dictionary_table = true`** (exact 2 columns: `Key`, `Value`, default schema, single lowercase word keys, `rquery` dialect) for domain synonyms; `enhance_query => true` alone does NOT replace curated domain aliases and may broaden recall semantically.
-7. **Regional Co-Location & DR Topology:**
-   - Co-locate GCS staging buckets, Dataflow workers, Managed Spark subnets, and Spanner in the primary region (e.g., Bangkok `asia-southeast3` / `regional-asia-southeast3`, 3-zone 99.99% SLA, `1.05x` vs `us-central1`, Thailand PDPA data residency).
-   - No pre-built dual-region pairs Bangkok + Singapore; pair `regional-asia-southeast3` with Singapore (`regional-asia-southeast1`, `1.144x`) via cross-region backup copy (`$0.08/GiB` transfer + `$0.03432/GiB-mo` backup storage) and/or Change Streams + Dataflow async DR, plus Vertex AI in `asia-southeast1` (~25 ms RTT).
+7. **Single-Region Co-Location & Companion AI/Security Topology:**
+   - Co-locate Cloud Spanner (`regional-asia-southeast3`, 3-zone sync quorum, 99.99% SLA, `1.05x` vs `us-central1`, Thailand PDPA residency), GCS staging buckets, Dataflow workers, Managed Spark subnets, Cloud Run, user-managed Secret Manager, and same-region PITR/backups inside the **single primary region** (e.g., Bangkok `asia-southeast3`).
+   - No pre-built dual-region pairs Bangkok + Singapore; use Singapore (`asia-southeast1`, ~25 ms RTT) **only** for companion GCP services unavailable in Bangkok (Vertex AI embeddings/LLMs, Model Armor, Cloud DLP)—not as a default second Spanner DR instance.
 
 ## Migration Decision Matrix
 
@@ -148,7 +148,7 @@ gcloud dataproc batches submit pyspark {script_gcs_path}/es_to_spanner.py \
 
 Read the matching reference file for full DDL, CLI flags, MQL monitoring queries, and edge cases:
 
-- [migration-lifecycle-and-cutover.md](references/migration-lifecycle-and-cutover.md) — 7-stage migration lifecycle, 10 assessment dimensions, Bangkok/Singapore pricing & DR topology, tooling matrix, TrueTime & MySQL transaction parity, Datastream + Dataflow CDC, DLQ replay, DVT, `Spanner_to_SourceDb` reverse replication, and MQL-gated cutover/fallback runbooks.
+- [migration-lifecycle-and-cutover.md](references/migration-lifecycle-and-cutover.md) — 7-stage migration lifecycle, 10 assessment dimensions, Bangkok single-region pricing & topology, tooling matrix, TrueTime & MySQL transaction parity, Datastream + Dataflow CDC, DLQ replay, DVT, `Spanner_to_SourceDb` reverse replication, and MQL-gated cutover/fallback runbooks.
 - [neo4j-ce-export-and-ingestion.md](references/neo4j-ce-export-and-ingestion.md) — Schematized vs schemaless (`DYNAMIC LABEL`/`DYNAMIC PROPERTIES`) decisions, heap-safe APOC CSV/JSON exports, nodes-before-edges RI engineering, Dataflow CSV & Avro manifest formats, worker vCPU sizing, BigQuery Reverse ETL (`EXPORT DATA`, 4 deletion strategies, Continuous Queries), and graph parity validation.
 - [opencypher-to-gql-parity.md](references/opencypher-to-gql-parity.md) — Complete openCypher v9 -> ISO GQL + GoogleSQL parity matrices: pattern matching (`TRAIL`, `ANY SHORTEST`/`CHEAPEST`, path variables), clauses (`FOR`, `CALL`/`CALL PER ()`, Graph Algorithms), types, all scalar/aggregate/list/math/string/array functions, and DML/Mutation API write equivalents (`GRAPH_TABLE`, `THEN RETURN`, `DETACH DELETE`).
 - [elasticsearch-to-spanner-fts.md](references/elasticsearch-to-spanner-fts.md) — Field classification, stemming vs `enhance_query => true`, Custom Dictionary tables (`fulltext_dictionary_table = true`), fuzzy `TOKENIZE_SUBSTRING` + `SEARCH_NGRAMS`/`SCORE_NGRAMS`, SQL CTE faceting + `post_filter` + Columnar rollups, and Managed Spark ES-to-Spanner bulk data movement.

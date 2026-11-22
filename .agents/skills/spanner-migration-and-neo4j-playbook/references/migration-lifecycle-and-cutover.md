@@ -19,10 +19,10 @@ Execute every non-trivial migration through seven gated stages:
 ### Mandatory 10-Dimension Assessment Checklist
 
 1. **Business goals:** Scalability, availability SLA (`99.99%` regional vs up to `99.999%` Enterprise Plus multi-region), consistency, latency, and TCO KPIs.
-2. **Cost analysis:** Compute + storage + network egress + one-time migration workers + ongoing DR/ops, factoring in 1-yr (`20%` off) and 3-yr (`40%` off) CUDs.
+2. **Cost analysis:** Compute + storage + network egress + one-time migration workers + ongoing backup/ops, factoring in 1-yr (`20%` off) and 3-yr (`40%` off) CUDs.
 3. **Schema compatibility:** Data types, primary keys, constraints, indexes, and removal of stored procedures/triggers.
 4. **Data consistency & transactions:** TrueTime external consistency vs source database isolation defaults.
-5. **Data locality & regional compliance:** Primary region selection, residency laws (e.g., Thailand PDPA), and cross-region DR design.
+5. **Data locality & regional compliance:** Primary region selection, residency laws (e.g., Thailand PDPA), and backup/recovery design.
 6. **Application code compatibility:** GoogleSQL vs PostgreSQL dialect, client SDKs/ORMs, mutation ceilings, and transaction retries.
 7. **Performance & scalability:** Read/write QPS ratios, storage growth, peak bursts, and latency SLAs.
 8. **Migration strategy & downtime:** Offline bulk dump/load vs live CDC + cutover window + fallback SLA.
@@ -36,15 +36,15 @@ Execute every non-trivial migration through seven gated stages:
 | **SLA & Topology** | `99.99%`, regional only | `99.99%`, regional + custom RO replicas | Up to `99.999%`, regional/dual/multi-region |
 | **Multi-Model & Search** | Relational, Key-Value | + **Spanner Graph**, **FTS**, **Vector Search** | + **Spanner Graph**, **FTS**, **Vector Search** |
 | **Analytics & Protection** | BQ federation, Data Boost, 7d PITR | + **Columnar Engine**, **Incremental Backups**, Managed Autoscaler, Locality Groups | + **Geo-Partitioning** |
-| **Bangkok (`regional-asia-southeast3`, 1.05x) Compute/node-hr** | `$0.945` (`$0.756` 1yr / `$0.567` 3yr) | **`$1.2915`** (`$1.0332` 1yr / `$0.7749` 3yr) | `$1.7955` (`$1.4364` 1yr / `$1.0773` 3yr) |
-| **Singapore (`regional-asia-southeast1`, 1.144x) Compute/node-hr** | `$1.0296` (`$0.82368` 1yr / `$0.61776` 3yr) | **`$1.40712`** (`$1.125696` 1yr / `$0.844272` 3yr) | `$1.95624` (`$1.564992` 1yr / `$1.173744` 3yr) |
-| **Storage (SSD / HDD / Backup) per GiB-mo (Bangkok)** | `$0.315` / `$0.063` / `$0.0315` | `$0.315` / `$0.063` / `$0.0315` | `$0.315` / `$0.063` / `$0.0315` |
-| **Data Boost per 1,000 SPU-hr (Bangkok / Singapore)** | `$1.2285` / `$1.33848` | `$1.2285` / `$1.33848` | `$1.2285` / `$1.33848` |
+| **Bangkok Primary (`regional-asia-southeast3`, 1.05x) Compute/node-hr** | `$0.945` (`$0.756` 1yr / `$0.567` 3yr) | **`$1.2915`** (`$1.0332` 1yr / `$0.7749` 3yr) | `$1.7955` (`$1.4364` 1yr / `$1.0773` 3yr) |
+| **Reference APAC (`regional-asia-southeast1`, 1.144x) Compute/node-hr** | `$1.0296` (`$0.82368` 1yr / `$0.61776` 3yr) | **`$1.40712`** (`$1.125696` 1yr / `$0.844272` 3yr) | `$1.95624` (`$1.564992` 1yr / `$1.173744` 3yr) |
+| **Storage (SSD / HDD / Same-Region Backup) per GiB-mo (Bangkok)** | `$0.315` / `$0.063` / `$0.0315` | `$0.315` / `$0.063` / `$0.0315` | `$0.315` / `$0.063` / `$0.0315` |
+| **Data Boost per 1,000 SPU-hr (Bangkok / Reference US)** | `$1.2285` / `$1.17` | `$1.2285` / `$1.17` | `$1.2285` / `$1.17` |
 
 - **Edition upgrades/downgrades:** Take **~10 minutes with zero downtime and zero data migration**. Monitor active edition-gated features via Cloud Monitoring metric `spanner.googleapis.com/instance/edition/feature_usage` (sampled every 60s, visible within 120s).
 - **Downgrade blockers:** Dropping from Enterprise requires removing all `PROPERTY GRAPH` schemas, `SEARCH INDEX`es, `VECTOR INDEX`es, KNN/ANN calls, Managed Autoscaler, and custom RO replicas. Dropping from Enterprise Plus also requires moving off dual/multi-region and deleting geo-partitions.
 - **Export/Import edition constraint:** Importing a Spanner export requires a target instance on the **same or higher edition** as the source.
-- **Regional DR topology note (Bangkok + Singapore example):** Cloud Spanner has no pre-built dual-region pairing `asia-southeast3` and `asia-southeast1` (dual-regions exist in AU/CA/DE/IN/JP; `asia2` covers Mumbai/Delhi/Singapore). Deploy primary on `regional-asia-southeast3` (3 synchronous zones: `asia-southeast3-a`, `asia-southeast3-b`, `asia-southeast3-c`; `$0.00/GiB` intra-region replication) and pair with Singapore (`regional-asia-southeast1`) via cross-region backup copy (`gcloud spanner backups copy`, `$0.08/GiB` Asia transfer + `$0.03432/GiB-mo` backup storage) and/or optional warm DR fed asynchronously via Change Streams + Dataflow. Co-locate GCS staging buckets and Dataflow workers in `asia-southeast3`.
+- **Regional topology note (Bangkok single-region example):** Cloud Spanner has no pre-built dual-region pairing `asia-southeast3` and `asia-southeast1` (dual-regions exist in AU/CA/DE/IN/JP; `asia2` covers Mumbai/Delhi/Singapore). Deploy a **single regional** Enterprise instance on `regional-asia-southeast3` (3 synchronous zones: `asia-southeast3-a`, `asia-southeast3-b`, `asia-southeast3-c`; 99.99% SLA; `$0.00/GiB` intra-region replication; Thailand PDPA residency) with co-located GCS staging buckets, Dataflow workers, Cloud Run, user-managed Secret Manager, and same-region PITR/incremental backups. Use `asia-southeast1` (~25 ms RTT) **only** for companion GCP services unavailable in Bangkok (Vertex AI embeddings/LLMs, Model Armor, Cloud DLP).
 
 ## 2. Migration Tooling Matrix
 
@@ -252,7 +252,7 @@ Requires active `Spanner_to_SourceDb` in `forward_migration` mode and reachable 
 ## 8. Security, Disaster Recovery & Support
 
 - **Encryption in Transit:** Spanner endpoints behind Google Front Ends (GFEs) enforce TLS by default; layer IAM, FGAC, CMEK, and **database deletion protection**.
-- **DR Protection Matrix:** Zonal failure -> 3-zone regional quorum (`regional-asia-southeast3`); Regional failure -> multi-region (Enterprise Plus) or regional primary + cross-region backup copy / Change Streams async DR (`regional-asia-southeast1`); Logical corruption -> **PITR** (up to 7 days), **Full/Incremental Backup Schedules** (up to 1 year; incremental backups require Enterprise+ via backup schedules only), or **GCS Export** (indefinite retention).
+- **Data Protection & Recovery Matrix:** Zonal failure -> 3-zone synchronous regional quorum (e.g., `regional-asia-southeast3`, 99.99% SLA); Multi-region HA -> Enterprise Plus dual-/multi-region configs (up to 99.999% SLA where supported and data residency permits); Logical corruption or accidental delete -> `--enable-drop-protection`, **same-region PITR** (up to 7 days), **Full/Incremental Backup Schedules** (up to 1 year; incremental backups require Enterprise+ via backup schedules only), or **GCS Export** (indefinite retention).
 
 | Dimension | Back up and Restore | Import and Export |
 | :--- | :--- | :--- |

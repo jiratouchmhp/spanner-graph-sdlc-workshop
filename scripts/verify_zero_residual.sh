@@ -3,20 +3,21 @@
 # Cloud Spanner Enterprise SDLC Workshop — Zero-Residual Post-Teardown Audit
 # =============================================================================
 # Audits a GCP project after teardown to confirm ZERO residual workshop
-# resources remain across Bangkok (`asia-southeast3`) and Singapore
-# (`asia-southeast1`):
-#   1. Cloud Spanner instances (`$SPANNER_INSTANCE`, `$SPANNER_SECONDARY_INSTANCE`)
-#      and any remaining backups on either instance
-#   2. Cloud Run MCP Toolbox services (`${SERVICE_PREFIX}-impact-analyst`,
+# resources remain across Bangkok (`asia-southeast3`, primary) and Singapore
+# (`asia-southeast1`, companion region ONLY for DLP & Model Armor templates
+# unavailable in Bangkok):
+#   1. Single Bangkok Cloud Spanner instance (`$SPANNER_INSTANCE`) and any
+#      remaining same-region backups
+#   2. 3 Bangkok Cloud Run MCP Toolbox services (`${SERVICE_PREFIX}-impact-analyst`,
 #      `${SERVICE_PREFIX}-adr-curator`, `${SERVICE_PREFIX}-security-auditor`)
-#   3. Secret Manager secrets (`${SECRET_PREFIX}-impact-analyst`,
+#   3. 3 Bangkok Secret Manager secrets (`${SECRET_PREFIX}-impact-analyst`,
 #      `${SECRET_PREFIX}-adr-curator`, `${SECRET_PREFIX}-security-auditor`)
 #   4. All 7 workshop Service Accounts (`sa-impact-analyst`, `sa-adr-curator`,
 #      `sa-security-auditor`, `sa-adk-agent-runner`, `sa-fgac-readonly`,
 #      `sa-fgac-adr-writer`, `sa-fgac-security-auditor`)
-#   5. Singapore Cloud DLP inspect template (`$DLP_TEMPLATE_ID`) &
+#   5. Companion Singapore Cloud DLP inspect template (`$DLP_TEMPLATE_ID`) &
 #      Model Armor regional template (`$MODEL_ARMOR_TEMPLATE_ID`)
-#   6. Workshop GCS staging bucket (`gs://${GCS_BUCKET}`)
+#   6. Bangkok workshop GCS staging bucket (`gs://${GCS_BUCKET}`)
 #
 # Exits 0 ONLY when 0 residual resources remain (or in `--dry-run` preview mode).
 #
@@ -24,7 +25,7 @@
 #   bash scripts/verify_zero_residual.sh --dry-run
 #   bash scripts/verify_zero_residual.sh --project my-sandbox-proj
 #   bash scripts/verify_zero_residual.sh --project my-sandbox-proj \
-#     --instance sdlc-kg-enterprise --dr-instance sdlc-kg-dr-singapore
+#     --instance sdlc-kg-enterprise --region asia-southeast3 --ai-region asia-southeast1
 # =============================================================================
 set -euo pipefail
 
@@ -77,13 +78,11 @@ if [[ -f "${REPO_ROOT}/.env" ]]; then
   done < "${REPO_ROOT}/.env"
 fi
 
-# Locked defaults aligned with WORKSHOP_SPEC.json & setup scripts
+# Locked defaults aligned with strict Bangkok single-region architecture
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-${SPANNER_PROJECT:-}}"
 REGION="${GOOGLE_CLOUD_REGION:-${SPANNER_REGION:-asia-southeast3}}"
-SECONDARY_REGION="${GOOGLE_CLOUD_SECONDARY_REGION:-asia-southeast1}"
-MODEL_ARMOR_LOCATION="${MODEL_ARMOR_LOCATION:-}"
+MODEL_ARMOR_LOCATION="${MODEL_ARMOR_LOCATION:-asia-southeast1}"
 SPANNER_INSTANCE="${SPANNER_INSTANCE:-sdlc-kg-enterprise}"
-SPANNER_SECONDARY_INSTANCE="${SPANNER_SECONDARY_INSTANCE:-sdlc-kg-dr-singapore}"
 SERVICE_PREFIX="${SERVICE_PREFIX:-sdlc-mcp}"
 SECRET_PREFIX="${SECRET_PREFIX:-sdlc-tools}"
 DLP_TEMPLATE_ID="${DLP_TEMPLATE_ID:-sdlc-pci-secret-inspector}"
@@ -96,21 +95,22 @@ usage() {
 Usage: bash scripts/verify_zero_residual.sh [OPTIONS]
 
 Audits a GCP project after workshop teardown and exits 0 ONLY when zero
-residual workshop resources remain across Bangkok & Singapore.
+residual workshop resources remain across Bangkok (primary) and Singapore
+(companion Cloud DLP & Model Armor templates only).
 
 Options:
-  --dry-run                    Print all audit commands without calling GCP APIs
-  --project <id>               GCP Project ID (default: $GOOGLE_CLOUD_PROJECT)
-  --instance <id>              Primary Spanner instance ID (default: sdlc-kg-enterprise)
-  --dr-instance <id>           Secondary Singapore DR Spanner instance (default: sdlc-kg-dr-singapore)
-  --service-prefix <prefix>    Cloud Run MCP service prefix (default: sdlc-mcp)
-  --secret-prefix <prefix>     Secret Manager secret prefix (default: sdlc-tools)
-  --region <region>            Primary region (default: asia-southeast3 Bangkok)
-  --secondary-region <region>  Secondary AI/DR region (default: asia-southeast1 Singapore)
-  --bucket <name>              Workshop GCS staging bucket name (default: <project>-sdlc-kg-<region>)
-  --dlp-template <id>          Cloud DLP inspect template ID (default: sdlc-pci-secret-inspector)
-  --model-armor-template <id>  Model Armor template ID (default: sdlc-agent-guardrail-sg)
-  -h, --help                   Show this help message
+  --dry-run                         Print all audit commands without calling GCP APIs
+  --project <id>                    GCP Project ID (default: $GOOGLE_CLOUD_PROJECT)
+  --instance <id>                   Bangkok Spanner instance ID (default: sdlc-kg-enterprise)
+  --service-prefix <prefix>         Cloud Run MCP service prefix (default: sdlc-mcp)
+  --secret-prefix <prefix>          Secret Manager secret prefix (default: sdlc-tools)
+  --region <region>                 Primary region for Spanner, Cloud Run, Secrets & GCS (default: asia-southeast3 Bangkok)
+  --ai-region <region>              Companion region ONLY for Cloud DLP & Model Armor templates (default: asia-southeast1 Singapore)
+  --model-armor-location <region>   Alias for --ai-region (default: asia-southeast1 Singapore)
+  --bucket <name>                   Workshop GCS staging bucket name (default: <project>-sdlc-kg-<region>)
+  --dlp-template <id>               Cloud DLP inspect template ID (default: sdlc-pci-secret-inspector)
+  --model-armor-template <id>       Model Armor template ID (default: sdlc-agent-guardrail-sg)
+  -h, --help                        Show this help message
 EOF
 }
 
@@ -137,11 +137,6 @@ while [[ $# -gt 0 ]]; do
       SPANNER_INSTANCE="$2"
       shift 2
       ;;
-    --dr-instance)
-      require_arg "$1" "$#"
-      SPANNER_SECONDARY_INSTANCE="$2"
-      shift 2
-      ;;
     --service-prefix)
       require_arg "$1" "$#"
       SERVICE_PREFIX="$2"
@@ -157,9 +152,9 @@ while [[ $# -gt 0 ]]; do
       REGION="$2"
       shift 2
       ;;
-    --secondary-region)
+    --ai-region|--model-armor-location)
       require_arg "$1" "$#"
-      SECONDARY_REGION="$2"
+      MODEL_ARMOR_LOCATION="$2"
       shift 2
       ;;
     --bucket)
@@ -189,9 +184,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "${MODEL_ARMOR_LOCATION}" ]]; then
-  MODEL_ARMOR_LOCATION="${SECONDARY_REGION}"
-fi
 MODEL_ARMOR_ENDPOINT="https://modelarmor.${MODEL_ARMOR_LOCATION}.rep.googleapis.com/"
 
 if [[ -z "${PROJECT_ID}" ]]; then
@@ -277,10 +269,11 @@ echo "==========================================================================
 echo "Cloud Spanner Enterprise Workshop — Zero-Residual Teardown Audit"
 echo "  Mode              : $([[ "${DRY_RUN}" == "true" ]] && echo "DRY-RUN" || echo "LIVE GCP")"
 echo "  Project           : ${PROJECT_ID}"
-echo "  Regions Audited   : ${REGION} (Bangkok) & ${SECONDARY_REGION} (Singapore)"
-echo "  Spanner Instances : ${SPANNER_INSTANCE}, ${SPANNER_SECONDARY_INSTANCE}"
-echo "  Cloud Run Prefix  : ${SERVICE_PREFIX}-*"
-echo "  Secret Prefix     : ${SECRET_PREFIX}-*"
+echo "  Primary Region    : ${REGION} (Bangkok — Spanner, Cloud Run, Secrets, GCS)"
+echo "  Companion AI/Sec  : ${MODEL_ARMOR_LOCATION} (Singapore — Cloud DLP & Model Armor only)"
+echo "  Spanner Instance  : ${SPANNER_INSTANCE} (regional-${REGION})"
+echo "  Cloud Run Prefix  : ${SERVICE_PREFIX}-* (${REGION})"
+echo "  Secret Prefix     : ${SECRET_PREFIX}-* (${REGION})"
 echo "  DLP / Model Armor : ${DLP_TEMPLATE_ID} / ${MODEL_ARMOR_TEMPLATE_ID} (${MODEL_ARMOR_LOCATION})"
 echo "  GCS Staging Bucket: gs://${GCS_BUCKET}"
 echo "=============================================================================="
@@ -298,53 +291,43 @@ if [[ "${DRY_RUN}" != "true" ]]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 1. Cloud Spanner Instances & Backups (Primary Bangkok + Secondary Singapore DR)
+# 1. Single Bangkok Cloud Spanner Instance & Same-Region Backups
 # ------------------------------------------------------------------------------
 echo ""
-echo "[1/6] Auditing Cloud Spanner instances & backups..."
-for inst in "${SPANNER_INSTANCE}" "${SPANNER_SECONDARY_INSTANCE}"; do
-  [[ -z "${inst}" ]] && continue
-  check_resource_absent "Spanner Instance" "${inst}" \
-    gcloud spanner instances describe "${inst}" --project="${PROJECT_ID}"
+echo "[1/6] Auditing Bangkok Cloud Spanner instance & same-region backups..."
+check_resource_absent "Spanner Instance" "${SPANNER_INSTANCE}" \
+  gcloud spanner instances describe "${SPANNER_INSTANCE}" --project="${PROJECT_ID}"
 
-  if [[ "${DRY_RUN}" == "true" ]]; then
-    printf '  [DRY-RUN]'
-    printf ' %q' gcloud spanner backups list --project="${PROJECT_ID}" --instance="${inst}" --format="value(name.basename())"
-    printf '\n'
-  else
-    if local_bkps="$(gcloud spanner backups list --project="${PROJECT_ID}" --instance="${inst}" --format="value(name.basename())" 2>&1)"; then
-      if [[ -n "${local_bkps}" ]]; then
-        while IFS= read -r bkp; do
-          [[ -z "${bkp}" ]] && continue
-          record_residual "Spanner Backup" "${inst}/${bkp}"
-        done <<< "${local_bkps}"
-      else
-        record_clean "Spanner Backups" "${inst} (0 backups)"
-      fi
-    elif is_absent_error "${local_bkps}"; then
-      record_clean "Spanner Backups" "${inst} (instance absent)"
+if [[ "${DRY_RUN}" == "true" ]]; then
+  printf '  [DRY-RUN]'
+  printf ' %q' gcloud spanner backups list --project="${PROJECT_ID}" --instance="${SPANNER_INSTANCE}" --format="value(name.basename())"
+  printf '\n'
+else
+  if local_bkps="$(gcloud spanner backups list --project="${PROJECT_ID}" --instance="${SPANNER_INSTANCE}" --format="value(name.basename())" 2>&1)"; then
+    if [[ -n "${local_bkps}" ]]; then
+      while IFS= read -r bkp; do
+        [[ -z "${bkp}" ]] && continue
+        record_residual "Spanner Backup" "${SPANNER_INSTANCE}/${bkp}"
+      done <<< "${local_bkps}"
     else
-      record_error "Spanner Backups" "${inst} (${local_bkps%%$'\n'*})"
+      record_clean "Spanner Backups" "${SPANNER_INSTANCE} (0 backups)"
     fi
+  elif is_absent_error "${local_bkps}"; then
+    record_clean "Spanner Backups" "${SPANNER_INSTANCE} (instance absent)"
+  else
+    record_error "Spanner Backups" "${SPANNER_INSTANCE} (${local_bkps%%$'\n'*})"
   fi
-done
-
-# ------------------------------------------------------------------------------
-# 2. Cloud Run MCP Toolbox Services
-# ------------------------------------------------------------------------------
-echo ""
-echo "[2/6] Auditing Cloud Run MCP Toolbox services..."
-CLOUD_RUN_REGIONS=("${REGION}")
-if [[ "${SECONDARY_REGION}" != "${REGION}" ]]; then
-  CLOUD_RUN_REGIONS+=("${SECONDARY_REGION}")
 fi
 
-for run_reg in "${CLOUD_RUN_REGIONS[@]}"; do
-  for persona in "${PERSONAS[@]}"; do
-    svc_name="${SERVICE_PREFIX}-${persona}"
-    check_resource_absent "Cloud Run (${run_reg})" "${svc_name}" \
-      gcloud run services describe "${svc_name}" --project="${PROJECT_ID}" --region="${run_reg}"
-  done
+# ------------------------------------------------------------------------------
+# 2. Bangkok Cloud Run MCP Toolbox Services (3 Personas)
+# ------------------------------------------------------------------------------
+echo ""
+echo "[2/6] Auditing Bangkok Cloud Run MCP Toolbox services (${REGION})..."
+for persona in "${PERSONAS[@]}"; do
+  svc_name="${SERVICE_PREFIX}-${persona}"
+  check_resource_absent "Cloud Run (${REGION})" "${svc_name}" \
+    gcloud run services describe "${svc_name}" --project="${PROJECT_ID}" --region="${REGION}"
 done
 
 # ------------------------------------------------------------------------------
@@ -451,7 +434,7 @@ if [[ "${DRY_RUN}" == "true" ]]; then
 fi
 
 if (( RESIDUAL_COUNT == 0 && AUDIT_ERRORS == 0 )); then
-  echo "[PASS] ZERO residual workshop resources remain in project '${PROJECT_ID}' (${REGION} & ${SECONDARY_REGION})."
+  echo "[PASS] ZERO residual workshop resources remain in project '${PROJECT_ID}' (${REGION} primary; ${MODEL_ARMOR_LOCATION} DLP/Model Armor)."
   echo "=============================================================================="
   exit 0
 fi

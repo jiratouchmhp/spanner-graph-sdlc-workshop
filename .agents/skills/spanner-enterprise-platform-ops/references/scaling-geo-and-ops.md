@@ -1,6 +1,6 @@
 # Cloud Spanner Scaling, Replication, Geo-Partitioning, DR & Lifecycle Ops
 
-Self-contained operational runbook for Cloud Spanner instance topologies, Paxos quorum and failover, Read Leases, Managed vs Open-Source Autoscaler deployment, zero-downtime `move-instance`, Geo-Partitioning (Preview), PITR, Backups and Cross-Region DR, Deletion Protection, Dataplex, IAM operational bundles, CMEK/EKM, and Audit Logging.
+Self-contained operational runbook for Cloud Spanner instance topologies, Paxos quorum and failover, Read Leases, Managed vs Open-Source Autoscaler deployment, zero-downtime `move-instance`, Geo-Partitioning (Preview), PITR, Backups and Restore, Deletion Protection, Dataplex, IAM operational bundles, CMEK/EKM, and Audit Logging.
 
 ## 1. Instance Configurations, Replication, Quorum & Leader Region
 
@@ -65,7 +65,7 @@ Scales instances and geo-partitioning instance partitions automatically (fast sc
 - **Asymmetric Read-Only Replica Autoscaling**:
   - Supported for **read-only replicas ONLY** (NOT RW/witness replicas and NOT geo-partitioning instance partitions).
   - Supports `disable_total_cpu_autoscaling=true` or `disable_high_priority_cpu_autoscaling=true` (**cannot disable both**). Keep CPU targets aligned across replicas so failover traffic does not overload a replica.
-  - **Southeast Asia Caveat**: `regional-asia-southeast3` currently lists **no** pre-built optional read-only replica regions; adding an optional RO replica (e.g., `asia-southeast1`) to a Bangkok base config requires submitting an allowlist request.
+  - **Southeast Asia Caveat**: `regional-asia-southeast3` currently lists **no** pre-built optional read-only replica regions; adding an optional RO replica to a Bangkok base config requires submitting an allowlist request.
   ```bash
   # Example: Managed Autoscaler + Asymmetric RO Replica (on a custom config with RO replicas)
   gcloud spanner instances update "{instance_id}" \
@@ -135,7 +135,7 @@ gcloud spanner instances move "{instance_id}" \
 - **Local-Probe Heuristic**: Pairing a **Global Unique** index with a **Local/Remote** (or partial PK) index lets queries omit `location` in `WHERE` — the optimizer probes the client's local region shard first and falls back to the Global index on a miss.
 - **Data Residency Caveat**: Even with placements, split boundary keys, Key Visualizer/lock/query/optimizer stats, **placement table PKs** (**always use opaque UUIDs — NEVER PII — in placement PKs!**), global indexes, and FK backing indexes may reside in the `default` partition. For strict single-country compliance (e.g., Thailand PDPA), `regional-asia-southeast3` keeps 100% of data, replicas, and metadata in-country.
 
-## 6. Data Protection: PITR, Backups, Incremental Chains & Cross-Region DR
+## 6. Data Protection: PITR, Backups, Incremental Chains & Restore
 
 ### Point-in-Time Recovery (PITR)
 
@@ -150,7 +150,7 @@ gcloud spanner instances move "{instance_id}" \
 
 ### Backups, Schedules & Incremental Chains
 
-- **Retention & Billing**: Up to **1 year** max retention; billed **24-hour minimum** per backup (Bangkok: $0.0315/GiB-mo; Singapore: $0.03432/GiB-mo). Zero CPU impact on source instance; creation takes ~1–4 hours.
+- **Retention & Billing**: Up to **1 year** max retention; billed **24-hour minimum** per backup (e.g., Bangkok `regional-asia-southeast3`: $0.0315/GiB-mo; US reference: $0.03/GiB-mo). Zero CPU impact on source instance; creation takes ~1–4 hours.
 - **Backup Exclusion Checklist (Must Re-Apply After Restore!)**:
   1. **IAM policies** (database roles & SQL FGAC grants ARE backed up, but IAM principal bindings are NOT!).
   2. Change stream data records.
@@ -160,7 +160,7 @@ gcloud spanner instances move "{instance_id}" \
 - **Schedules**: Max **4 schedules/database**. Full backup schedule (all editions): min interval **12 hours**. Incremental backup schedule (**Enterprise & Enterprise Plus ONLY**): min interval **4 hours** (**schedule-only** — cannot take on-demand incremental backups!). New schedules can take up to **24h** to activate; runs start within a **4-hour window** of `versionTime`. New instances default to `--default-backup-schedule-type=AUTOMATIC` (daily full, 7d retention). **You cannot delete an instance while it holds any backups.**
 - **Incremental Backup Chains**: 1 full + up to **13 incrementals** (`incrementalBackupChainId`). A new chain (full backup) is forced when: (a) oldest full backup reaches **>= 28 days** old, (b) newest backup in chain is deleted, (c) schedule is modified, or (d) DB CMEK encryption changes on an inheriting schedule. Expiring an older backup retains referenced blocks (`freeableSizeBytes = 0`) until all newer chain backups expire (base full backup billed up to `min(retention + 28d, retention + interval * 14)`). Cross-region copy automatically deduplicates blocks already present at destination!
 
-### Cross-Region Copy & Restore Mechanics
+### Backup Copy & Restore Mechanics
 
 - **Same-Config Restore Rule**: Backups restore ONLY to a **new database** in the **same GCP project** and **same instance configuration**. Target instance needs `< 10 TiB/node` headroom and a compatible edition (restoring an Enterprise backup using FTS/Vector/Graph/Queues onto a Standard instance **fails**).
 - **Restore Lifecycle States**: `CREATING` (max **10 concurrent restores/instance**, ~1 hr, source backup locked) → `READY_OPTIMIZING` (DB readable/writable, slightly elevated read latency, incomplete storage metrics, **source backup STILL locked!**) → `READY` (optimization finished, source backup unlocked).
@@ -176,11 +176,11 @@ gcloud spanner backup-schedules create "{schedule_id}" \
   --retention-duration="14d" \
   --backup-type=INCREMENTAL
 
-# Copy backup from Bangkok (regional-asia-southeast3) to Singapore DR (regional-asia-southeast1)
+# Optional: Copy backup to another instance (same-region isolation, or cross-region where residency permits)
 gcloud spanner backups copy \
   --project="{project_id}" \
-  --source-instance="{instance_id}" --source-backup="{backup_id}" \
-  --destination-instance="{dr_instance_id}" --destination-backup="{dr_backup_id}" \
+  --source-instance="{source_instance_id}" --source-backup="{backup_id}" \
+  --destination-instance="{target_instance_id}" --destination-backup="{copied_backup_id}" \
   --expiration-date="2026-12-31T00:00:00Z"
 ```
 

@@ -90,7 +90,7 @@ name: vertex-embed-768
 type: gemini
 model: gemini-embedding-001
 project: ${GOOGLE_CLOUD_PROJECT}
-location: ${VERTEX_AI_LOCATION:asia-southeast1}   # Singapore (~25 ms RTT from Bangkok)
+location: ${VERTEX_AI_LOCATION:asia-southeast1}   # Companion SG region for Vertex AI (~25 ms RTT from Bangkok)
 dimension: 768
 # Local non-production prototype alternative ONLY (mutually exclusive with project/location):
 # apiKey: ${GOOGLE_API_KEY}

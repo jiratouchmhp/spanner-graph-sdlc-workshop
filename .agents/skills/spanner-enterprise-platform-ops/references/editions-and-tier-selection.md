@@ -29,7 +29,7 @@ Cloud Spanner editions govern feature access and maximum availability SLA at the
 
 Pricing verified against [Cloud Spanner Pricing](https://cloud.google.com/spanner/pricing) (USD, 2026; monthly compute calculated at 730 hours/month):
 
-| Pricing Dimension | Bangkok Primary (`regional-asia-southeast3`, 1.05× US) | Singapore Secondary (`regional-asia-southeast1`, 1.144× US) | Reference US (`regional-us-central1`, 1.00×) |
+| Pricing Dimension | Bangkok Primary (`regional-asia-southeast3`, 1.05× US) | Reference APAC (`regional-asia-southeast1`, 1.144× US) | Reference US (`regional-us-central1`, 1.00×) |
 | :--- | :--- | :--- | :--- |
 | **SLA & Topology** | 99.99% (3 zones: `asia-southeast3-{a,b,c}`) | 99.99% (3 zones: `asia-southeast1-{a,b,c}`) | 99.99% (3 zones) |
 | **Standard Compute** (node-hr / mo) | $0.945 / hr ($689.85 / mo) | $1.0296 / hr ($751.608 / mo) | $0.90 / hr ($657.00 / mo) |
@@ -40,18 +40,17 @@ Pricing verified against [Cloud Spanner Pricing](https://cloud.google.com/spanne
 | **Additional RO Replica** — Ent / Ent+ | $0.4305 / $0.5985 per node-hr | $0.46904 / $0.65208 per node-hr | — |
 | **Storage (SSD / HDD / Backup)** | $0.315 / $0.063 / $0.0315 per GiB-mo | $0.3432 / $0.06864 / $0.03432 per GiB-mo | $0.30 / $0.06 / $0.03 |
 | **Data Boost** | $1.2285 / 1,000 SPU-hr | $1.33848 / 1,000 SPU-hr | $1.17 / 1,000 SPU-hr |
-| **Intra-Region Replication** | $0.00 / GiB | $0.00 / GiB | $0.00 / GiB |
-| **Cross-Region Backup Egress (Asia)** | $0.08 / GiB (`asia-southeast3` → `asia-southeast1`) | $0.08 / GiB | — |
+| **Intra-Region Replication & Same-Region Backups** | $0.00 / GiB | $0.00 / GiB | $0.00 / GiB |
+| **Optional Cross-Region Backup Egress (Asia)** | $0.08 / GiB (only if cross-region copy is explicitly enabled) | $0.08 / GiB | — |
 | **Dev/PoC Estimate (100 PU × 8 hr, Ent)** | **$1.0332** (0.1 node × 8 hr × $1.2915) | $1.1257 | $0.9840 |
 
 ### Southeast Asia Architectural Reality Check
 
 - **No Pre-Built Bangkok + Singapore Dual-Region or Multi-Region Config**: Pre-built dual-region configurations exist only in Australia (`dual-region-australia1`), Canada (`dual-region-canada1`), Germany (`dual-region-germany1`), India (`dual-region-india1`), and Japan (`dual-region-japan1`). Pre-built Asia multi-region configs are `asia1` (Tokyo/Osaka + Seoul witness) and `asia2` (Mumbai/Delhi/Singapore — allowlisted, 3 RW regions, no witness). Neither `regional-asia-southeast3` nor `regional-asia-southeast1` lists pre-built optional read-only replica regions.
-- **Recommended Thailand Enterprise Reference Architecture**:
-  1. **Primary OLTP & AI Data Platform**: Deploy `regional-asia-southeast3` (Bangkok) on **Enterprise** edition for 3-zone synchronous quorum, 99.99% SLA, Thailand PDPA data residency, and full access to Graph, FTS, Vector Search, Queues, Managed Autoscaler, Tiered Storage, Columnar Engine, and Incremental Backups without paying Enterprise Plus rates.
-  2. **Vertex AI Integration**: Route regional Vertex AI text-embedding and generative model endpoints (e.g., `gemini-embedding-001`, `gemini-2.5-flash`) to `asia-southeast1` (Singapore, ~25 ms RTT from Bangkok; use `global` fallback only for supported LLM endpoints, never for regional embedding `predict` models).
-  3. **Regional Disaster Recovery**: Copy backups from `regional-asia-southeast3` to `regional-asia-southeast1` via `gcloud spanner backups copy` ($0.08/GiB egress + $0.03432/GiB-mo Singapore backup storage), or run warm/passive async DR to a `regional-asia-southeast1` Enterprise instance using **Spanner Change Streams + Dataflow**.
-  4. **Quota Fallback**: Fall back to `regional-asia-southeast1` for non-production environments if a project lacks Spanner quota in `asia-southeast3`.
+- **Recommended Thailand Single-Region Enterprise Architecture**:
+  1. **Single-Region Primary Database & App Stack (`asia-southeast3` / `regional-asia-southeast3`)**: Deploy a single Cloud Spanner **Enterprise** instance in Bangkok (3-zone synchronous quorum `asia-southeast3-{a,b,c}`, 99.99% SLA, Thailand PDPA data residency) alongside co-located Cloud Run, user-managed Secret Manager, GCS staging, Dataflow, and same-region 7-day PITR + automated incremental backups (`$0.00/GiB` intra-region replication, avoiding Enterprise Plus rates).
+  2. **Companion Region ONLY for Services Unavailable in Bangkok (`asia-southeast1`, Singapore, ~25 ms RTT)**: Use Singapore strictly for GCP services unavailable in `asia-southeast3`: Vertex AI (`gemini-embedding-001`, `gemini-2.5-flash`; `global` fallback applies only to supported LLMs, never regional embedding `predict` models), Model Armor (`modelarmor.asia-southeast1.rep.googleapis.com`), and Cloud DLP / Sensitive Data Protection—not as a default second Spanner instance.
+  3. **General Multi-Region & Backup Note**: Single-region deployments protect against zonal failure via 3-zone synchronous quorum and against logical corruption via same-region PITR (`1h`–`7d`) and incremental backup schedules. Multi-region active-active (`99.999%` SLA) requires **Enterprise Plus** on supported dual-/multi-region configs where data-residency policies allow.
 
 ## 3. Upgrading, Downgrading & Tracking Edition Usage
 
@@ -191,7 +190,7 @@ For deep DDL/query authoring on these capabilities, route to `spanner-schema-and
 - **Data Boost (All Editions)**:
   - Serverless isolated compute for batch, analytical, federated, and export workloads with near-zero OLTP CPU impact; uses isolated HDD disk load quota.
   - **Eligibility**: Query execution plan MUST start with a **Distributed Union** root operator (`PartitionQuery`, `PartitionRead`, BigQuery Federation, Dataflow, Spark).
-  - **IAM & Billing**: Requires `spanner.databases.useDataBoost` (`roles/spanner.databaseReaderWithDataBoost`). Billed strictly on consumed SPU-hours (Bangkok: $1.2285 / 1,000 SPU-hr; Singapore: $1.33848 / 1,000 SPU-hr).
+  - **IAM & Billing**: Requires `spanner.databases.useDataBoost` (`roles/spanner.databaseReaderWithDataBoost`). Billed strictly on consumed SPU-hours (e.g., Bangkok: $1.2285 / 1,000 SPU-hr; US reference: $1.17 / 1,000 SPU-hr).
 - **Columnar Engine (Enterprise / Enterprise Plus)**:
   - Maintains columnar blocks alongside row-oriented storage for **up to 200× faster** analytical scans with strong consistency (merges live row mutations at query time).
   - **Configuration & Hints**: Enable via ``ALTER DATABASE `{database_id}` SET OPTIONS (columnar_policy = ...)`` (and table/index options); verify via **"Columnar read share"** in execution plans or force with `@{SCAN_METHOD=COLUMNAR}` / `@{SCAN_METHOD=NO_COLUMNAR}`.

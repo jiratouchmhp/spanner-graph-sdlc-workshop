@@ -46,14 +46,15 @@ consistent **Cloud Spanner Enterprise** or **Enterprise Plus** database.
 - **Downgrade preconditions:** Before downgrading Enterprise to Standard, drop
   all property graphs, search indexes, and vector indexes, and stop all KNN/ANN
   distance calls.
-- **Regional Topology Reference (e.g., Southeast Asia):** Keep operational data
-  resident in a regional Spanner Enterprise instance such as Bangkok
-  (`regional-asia-southeast3`, 3-zone 99.99% SLA, \$1.2915/node-hr on-demand)
-  and invoke Vertex AI regional endpoints in Singapore (`asia-southeast1`,
-  ~25 ms RTT, GA for `gemini-embedding-001` and `gemini-2.5-flash`). Spanner
-  currently has no pre-built dual-region pairing `asia-southeast3` +
-  `asia-southeast1`; pair primary Bangkok with scheduled cross-region backup
-  copies (`$0.08/GiB` egress) or Change Streams async DR to `asia-southeast1`.
+- **Regional Topology Reference (Bangkok Primary + Singapore Companion):** Keep
+  all operational data, Cloud Spanner Enterprise (`regional-asia-southeast3`,
+  3-zone sync quorum, 99.99% SLA, \$1.2915/node-hr on-demand, Thailand PDPA
+  residency), Cloud Run services, user-managed Secret Manager, GCS/Dataflow, and
+  same-region PITR/backups in **Bangkok (`asia-southeast3`)**. Call **Singapore
+  (`asia-southeast1`, ~25 ms RTT)** **only** for companion GCP services
+  unavailable in Bangkok: Vertex AI (`gemini-embedding-001` and
+  `gemini-2.5-flash`), Model Armor (`modelarmor.asia-southeast1.rep.googleapis.com`),
+  and Cloud DLP / Sensitive Data Protection.
 - **Compliance note:** Neither Vertex AI Prediction (Spanner ML) nor Full-Text
   Search supports **Assured Workloads**. Use **VPC Service Controls (VPC-SC)**
   to keep production Spanner instances isolated from non-production endpoints.
@@ -275,8 +276,9 @@ or latency, debugging errors, or architecting end-to-end pipelines:
 - [Hybrid Retrieval & Production GraphRAG](references/hybrid-retrieval-and-graphrag.md) —
   server-side RRF (`UNNEST(ARRAY(...)) WITH OFFSET`), RSF with zero-division
   guards, FTS-filtered KNN, two-stage `ML.PREDICT` cross-encoder reranking,
-  Graph + FTS/Vector `NEXT` & `GRAPH_TABLE` patterns, Bangkok/Singapore
-  GraphRAG reference architecture, dialect parity matrix, and anti-patterns.
+  Graph + FTS/Vector `NEXT` & `GRAPH_TABLE` patterns, Bangkok primary +
+  Singapore companion GraphRAG reference architecture, dialect parity matrix,
+  and anti-patterns.
 
 ## 7. Sibling Skill Routing
 

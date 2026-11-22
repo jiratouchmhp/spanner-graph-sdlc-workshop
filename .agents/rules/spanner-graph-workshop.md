@@ -7,9 +7,11 @@ description: "Always-on safety, regional residency, GoogleSQL dialect, and MCP s
 
 Follow these non-negotiable safety, dialect, and security guardrails on every turn. Defer detailed DDL, GQL, search, MCP, and sizing patterns to [GEMINI.md](../../GEMINI.md) and `.agents/skills/*`.
 
+> **Strict Single-Region Bangkok Architecture (NO 2-Region Spanner DR):** **Bangkok (`asia-southeast3` / `regional-asia-southeast3`)** is the Primary & ONLY database/app region (single Cloud Spanner Enterprise instance, Cloud Run MCP Toolbox, user-managed Secret Manager, GCS/Dataflow, same-region backups/PITR). **Singapore (`asia-southeast1`, `~25 ms` RTT)** is ONLY a companion region for services unavailable in Bangkok (**Vertex AI**, **Model Armor**, and **Cloud DLP**). Never add a second Singapore Spanner DR instance or cross-region Spanner backup copy step.
+
 ## 1. Live Cloud, Secret & Workspace Safety
 
-- **Require explicit confirmation before live GCP/Spanner mutations**: never run `make provision-gcp`, `make cleanup-gcp`, live pipeline writes (without `--dry-run`), DDL/DML updates, IAM/FGAC changes, or Cloud Run/Model Armor deployments without explicit user approval of target project, instance, database, and region.
+- **Require explicit confirmation before live GCP/Spanner mutations**: never run `make provision-gcp`, `make cleanup-gcp`, `make cleanup-all-gcp`, live pipeline writes (without `--dry-run`), DDL/DML updates, IAM/FGAC changes, or Cloud Run/Model Armor deployments without explicit user approval of target project, instance, database, and region.
 - **Verify active GCP context first**: inspect `gcloud config get-value project`, `.env`, and `SPANNER_EMULATOR_HOST` before any live command so workshop actions never touch an unintended project.
 - **Zero secrets in repository files**: never commit credentials, OAuth client secrets, or active static `apiKey` values into `tools.yaml`, `mcp_config.json`, scripts, or docs; keep `.env` untracked and use ADC / Cloud Run Workload Identity.
 - **Keep lab edits inside `starter/`**: solve hands-on exercises exclusively in `starter/` (`15` `TODO(Lab 1–8)` files); do not alter `data/`, `solution/`, or expected fixtures unless explicitly requested.
@@ -17,9 +19,10 @@ Follow these non-negotiable safety, dialect, and security guardrails on every tu
 ## 2. Dialect, Edition, Region & Compute Floor
 
 - **Dialect & Edition (`INV-01`)**: enforce **GoogleSQL** (`GOOGLE_STANDARD_SQL`) and **Cloud Spanner Enterprise Edition** (`ENTERPRISE`).
-- **Regional residency**: default primary Spanner, Cloud Run, GCS, and Dataflow resources to Bangkok (`asia-southeast3` / `regional-asia-southeast3`); target Singapore (`asia-southeast1`) for Vertex AI, Model Armor (`modelarmor.asia-southeast1.rep.googleapis.com`), and cross-region backup DR.
+- **Primary & Only Database/App Region (Bangkok)**: keep ALL Cloud Spanner Enterprise instances (`regional-asia-southeast3` — single regional instance, 3-zone synchronous quorum `a/b/c`, 99.99% SLA, Thailand PDPA data residency, same-region Bangkok backups/PITR), Cloud Run MCP Toolbox services, Secret Manager (`user-managed` in `asia-southeast3`), GCS staging, and Dataflow in **Bangkok (`asia-southeast3`)**. **NO 2-region / cross-region Spanner DR instance, NO cross-region Spanner backup copy workflow, and NO default cross-region DR backup egress.**
+- **Companion Region ONLY for Services Unavailable in Bangkok (Singapore)**: target **Singapore (`asia-southeast1`, `~25 ms` RTT)** strictly for **Vertex AI** (`gemini-embedding-001` & `gemini-2.5-flash`), **Model Armor** (`modelarmor.asia-southeast1.rep.googleapis.com`), and **Cloud DLP / Sensitive Data Protection**.
 - **Vertex AI endpoint rule**: never use `global` for `gemini-embedding-001` (regional `asia-southeast1` required; `global` fallback applies strictly to `gemini-2.5-flash` LLM synthesis).
-- **Compute floor**: `100` PU (`--default-backup-schedule-type=NONE`) is workshop sandbox-only; production requires `>= 1,000` PUs (1 node).
+- **Compute & backup floor**: `100` PU (`--default-backup-schedule-type=NONE`) is workshop sandbox-only; production requires `>= 1,000` PUs (1 node) + same-region Bangkok `AUTOMATIC` backups + 7-day PITR.
 
 ## 3. Schema, Property Graph, FTS & Vector Guardrails (`INV-02`–`INV-09`)
 

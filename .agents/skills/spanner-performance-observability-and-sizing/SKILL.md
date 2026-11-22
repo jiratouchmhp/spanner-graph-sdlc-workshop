@@ -4,7 +4,7 @@ metadata:
   version: "1.0.0"
   category: "Cloud Spanner Enterprise"
 description: >-
-  Guides Cloud Spanner query optimization, execution plans, Insights, Key Visualizer, pre-splitting, and Enterprise sizing. Use when managing Query Optimizer versions/ANALYZE/stats pinning, profiling execution plans, applying hints or Index Advisor, querying SPANNER_SYS (Query/Lock/Txn/Read Insights, OLDEST_ACTIVE_QUERIES, cancel_query, tags), triaging CPU/locks, diagnosing Key Visualizer heatmaps, pre-splitting (splits add), tuning CPU targets (65%/45%) and max_commit_delay, or modeling node capacity and Bangkok/Singapore Enterprise 3-store TCO. Don't use for table/index/TTL DDL (spanner-schema-and-data-modeling), autoscaler deployment/edition ops (spanner-enterprise-platform-ops), Graph GQL/Algorithms (spanner-graph-modeling-and-gql), FTS/Vector/GraphRAG (spanner-search-ai-and-graphrag), migrations (spanner-migration-and-neo4j-playbook), or MCP/FGAC security (spanner-mcp-toolbox-and-agent-security).
+  Guides Cloud Spanner query optimization, execution plans, Insights, Key Visualizer, pre-splitting, and Enterprise sizing. Use when managing Query Optimizer versions/ANALYZE/stats pinning, profiling execution plans, applying hints or Index Advisor, querying SPANNER_SYS (Query/Lock/Txn/Read Insights, OLDEST_ACTIVE_QUERIES, cancel_query, tags), triaging CPU/locks, diagnosing Key Visualizer heatmaps, pre-splitting (splits add), tuning CPU targets (65%/45%) and max_commit_delay, or modeling node capacity and Bangkok Enterprise 3-store TCO. Don't use for table/index/TTL DDL (spanner-schema-and-data-modeling), autoscaler deployment/edition ops (spanner-enterprise-platform-ops), Graph GQL/Algorithms (spanner-graph-modeling-and-gql), FTS/Vector/GraphRAG (spanner-search-ai-and-graphrag), migrations (spanner-migration-and-neo4j-playbook), or MCP/FGAC security (spanner-mcp-toolbox-and-agent-security).
 ---
 
 # Cloud Spanner Performance, Observability & Enterprise Sizing
@@ -167,15 +167,15 @@ gcloud spanner databases splits list "{database_id}" \
   --instance="{instance_id}"
 ```
 
-### 4. Regional Node Sizing Formula & Bangkok / Singapore Quick Reference
+### 4. Regional Node Sizing Formula & Bangkok Enterprise Quick Reference
 
 $$\text{Nodes}_{\text{prod}} = \max\!\left(\left\lceil \frac{\text{Read QPS}}{C_{\text{read}} \cdot U_{\text{hp}}} + \frac{\text{Write QPS}}{C_{\text{write}} \cdot U_{\text{hp}}} \right\rceil,\; \left\lceil \frac{\text{Total Storage (TiB)}}{7.5} \right\rceil,\; 1\right)$$
 
 - **Regional SSD capacities (`C_read` / `C_write` per node at 100% CPU, 1 KB ops)**: `22,500` reads/s, `3,500` standard writes/s, or `22,500` writes/s with `max_commit_delay = 100 ms` (`U_hp = 0.65` → `14,625` R / `2,275` standard W / `14,625` batched W per node).
 - **Dual-/Multi-Region SSD capacities**: `15,000` reads/s per region, `2,700` standard writes/s (`1,500` 3-continent), or `15,000` batched writes/s (`U_hp = 0.45`).
 - **Regional Enterprise Economics (verified 2026 USD, 730 hrs/mo)**:
-  - **Bangkok (`regional-asia-southeast3`, 1.05× US)**: `$1.2915/node-hr` (`$942.80/mo` OD; `$754.24/mo` 1-yr CUD; `$565.68/mo` 3-yr CUD), SSD `$0.315/GiB-mo`, HDD `$0.063/GiB-mo` (**5× cheaper**), Backup `$0.0315/GiB-mo`, Data Boost `$1.2285/1k SPU-hr`.
-  - **Singapore (`regional-asia-southeast1`, 1.144× US)**: `$1.40712/node-hr` (`$1,027.20/mo` OD), SSD `$0.3432/GiB-mo`, Backup `$0.03432/GiB-mo`, Cross-region backup egress `$0.08/GiB`. (No pre-built Bangkok+Singapore dual-region exists; pair `regional-asia-southeast3` primary with Singapore DR backup copy or Change Streams async DR.)
+  - **Bangkok Single-Region Primary (`regional-asia-southeast3`, 1.05× US)**: `$1.2915/node-hr` (`$942.80/mo` OD; `$754.24/mo` 1-yr CUD; `$565.68/mo` 3-yr CUD), SSD `$0.315/GiB-mo`, HDD `$0.063/GiB-mo` (**5× cheaper**), same-region Backup `$0.0315/GiB-mo`, Data Boost `$1.2285/1k SPU-hr`.
+  - **Companion Region Note**: No pre-built Bangkok+Singapore dual-region exists; keep Spanner, Cloud Run, user-managed Secrets, GCS, Dataflow, and same-region PITR/backups in single-region `regional-asia-southeast3`, and use `asia-southeast1` (~25 ms RTT) **only** for companion GCP services unavailable in Bangkok (Vertex AI, Model Armor, Cloud DLP).
 
 ---
 
@@ -184,4 +184,4 @@ $$\text{Nodes}_{\text{prod}} = \max\!\left(\left\lceil \frac{\text{Read QPS}}{C_
 - [query-optimizer-and-execution-plans.md](references/query-optimizer-and-execution-plans.md) — Optimizer v1–v9 evolution, `ANALYZE` & statistics GC/PII pinning, 6-tier override precedence, distributed execution operators, full GoogleSQL/PostgreSQL hint matrix, SQL tuning & no-`ROW_NUMBER()` workarounds, Visualizer JSON replay, and Index Advisor.
 - [query-insights-and-introspection.md](references/query-insights-and-introspection.md) — IAM vs. FGAC observability access, clock-aligned retention windows, `QUERY_STATS` / `LOCK_STATS` / `TXN_STATS` / `READ_STATS` schemas & cross-dialect P99 SQL, `ACTIVE_QUERIES` & `cancel_query`, request/transaction tags & call-stack autotagging, and high-CPU triage runbook.
 - [key-visualizer-and-presplitting.md](references/key-visualizer-and-presplitting.md) — Key Visualizer metrics, 1,000-range cap, relative brightness caveats, visual hotspot diagnostic catalog, dynamic vs. pre-splitting lifecycle, exact `splits.txt` quoting/CLI/REST syntax, quotas, deletion traps, and split-manager automation.
-- [enterprise-sizing-and-tco.md](references/enterprise-sizing-and-tco.md) — Verified per-node throughput benchmarks, `max_commit_delay` tuning, DML/mutation/service quotas, granular vs. multi-node limits, Tiered Storage existence-check trap, Columnar Engine, failover CPU & autoscaler targets, verified Bangkok/Singapore pricing, worked sizing optimization, and 3-store consolidation TCO.
+- [enterprise-sizing-and-tco.md](references/enterprise-sizing-and-tco.md) — Verified per-node throughput benchmarks, `max_commit_delay` tuning, DML/mutation/service quotas, granular vs. multi-node limits, Tiered Storage existence-check trap, Columnar Engine, failover CPU & autoscaler targets, verified Bangkok/reference regional pricing, worked sizing optimization, and 3-store consolidation TCO.

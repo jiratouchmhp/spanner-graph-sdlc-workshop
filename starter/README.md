@@ -59,14 +59,14 @@ make TRACK=starter verify-lab LAB=all
 make TRACK=solution verify-lab LAB=all
 ```
 
-### Regional Architecture Defaults (Locked in `WORKSHOP_SPEC.json`)
+### Regional Architecture Defaults (Strict Bangkok Single-Region Core — NO 2-Region Spanner DR)
 
 | Component | Default Region / Setting | Why It Matters |
 | :--- | :--- | :--- |
-| **Primary Cloud Spanner Enterprise** | Bangkok (`asia-southeast3` / `regional-asia-southeast3`) | 3-zone sync quorum (`a/b/c`), 99.99% SLA, Thailand PDPA data residency; instance `sdlc-kg-enterprise`, DB `sdlc_knowledge_graph` (`GOOGLE_STANDARD_SQL`). |
-| **Vertex AI Embeddings & LLM** | Singapore (`asia-southeast1`, ~25 ms RTT from Bangkok) | `gemini-embedding-001` (768-dim `ARRAY<FLOAT32>`) **requires a regional endpoint** (NEVER `global`); `gemini-2.5-flash` for LLM synthesis. |
-| **Model Armor & DR Backup Copy** | Singapore (`asia-southeast1`) | Regional Model Armor (`modelarmor.asia-southeast1.rep.googleapis.com`) + cross-region Spanner backup copy (`$0.08/GiB` egress). |
-| **Compute Floor** | Workshop: `100` PU (`~$1.15` / 8 hr) | **Production requires `>= 1,000` PUs (`1` node)** to unlock dedicated zone tasks, Managed Autoscaler, and Remote Functions. |
+| **Primary & Only Database/App Region** | **Bangkok (`asia-southeast3` / `regional-asia-southeast3`)** | Single Cloud Spanner Enterprise regional instance (3-zone sync quorum `a/b/c`, 99.99% SLA, Thailand PDPA data residency, same-region Bangkok backups/PITR), Cloud Run MCP Toolbox, user-managed Secret Manager, GCS & Dataflow (`sdlc-kg-enterprise` / `sdlc_knowledge_graph`). **No 2-region Spanner DR instance.** |
+| **Companion AI Region *(Unavailable in Bangkok)*** | **Singapore (`asia-southeast1`, `~25 ms` RTT)** | Vertex AI `gemini-embedding-001` (768-dim `ARRAY<FLOAT32>`, **regional endpoint required** — NEVER `global`) & `gemini-2.5-flash` LLM synthesis. |
+| **Companion Security Guardrails *(Unavailable in Bangkok)*** | **Singapore (`asia-southeast1`, `~25 ms` RTT)** | Model Armor (`modelarmor.asia-southeast1.rep.googleapis.com`) + Cloud DLP / Sensitive Data Protection companion inspection template. |
+| **Compute & Backup Floor** | Workshop: `100` PU (`~$1.15` / 8 hr, `--default-backup-schedule-type=NONE`) | **Production requires `>= 1,000` PUs (`1` node)** to unlock dedicated zone tasks, Managed Autoscaler, Remote Functions, and same-region Bangkok `AUTOMATIC` backups + 7-day PITR. |
 
 ---
 
@@ -89,7 +89,7 @@ Check off each file as you complete its `TODO(Lab N)` exercises and pass `make T
 | [ ] | **6** | [sql/04_fgac_roles_views.sql](sql/04_fgac_roles_views.sql) | Create `PublicApiCatalogView` (`SQL SECURITY INVOKER` + explicit `CAST`) and least-privilege `GRANT SELECT` statements for `sdlc_readonly_role` (column-restricted `Owners`). | [04_fgac_roles_views.sql](../solution/sql/04_fgac_roles_views.sql) | `make TRACK=starter verify-lab LAB=6` |
 | [ ] | **6** | [mcp/tools.yaml](mcp/tools.yaml) | Configure secretless Vertex AI `embeddingModels` (`gemini-embedding-001` in `asia-southeast1`), OIDC `authServices` (`@caller_email`), security controls (`readOnly`, `valueFromParam`/`embeddedBy`, anchored `allowedValues`) on the 5 pre-scaffolded curated `spanner-sql` tools, and 3 isolated persona `toolsets`. | [tools.yaml](../solution/mcp/tools.yaml) | `make TRACK=starter verify-lab LAB=6` |
 | [ ] | **6** | [mcp/adk_multi_agent_demo.py](mcp/adk_multi_agent_demo.py) | Implement `run_persona_query()` using `load_persona_config()` to slice your own `starter/mcp/tools.yaml` allowlists and enforce OIDC fail-closed binding against prompt injection (`--mock`). | [adk_multi_agent_demo.py](../solution/mcp/adk_multi_agent_demo.py) | `make TRACK=starter verify-lab LAB=6` |
-| [ ] | **7** | [tools/customer_scale_worksheet.json](tools/customer_scale_worksheet.json) | Plug in your real enterprise scale (`nodes`, `edges`, `chunks`, `qps`, `cold_hdd_pct`, Bangkok primary + Singapore DR), run `sizing_calculator.py --worksheet`, then set `todo_status` to `"COMPLETED"`. | [sizing_calculator.py](../solution/tools/sizing_calculator.py) | `make TRACK=starter verify-lab LAB=7` |
+| [ ] | **7** | [tools/customer_scale_worksheet.json](tools/customer_scale_worksheet.json) | Plug in your real enterprise scale (`nodes`, `edges`, `chunks`, `qps`, `cold_hdd_pct` for pure Bangkok single-region Enterprise with `$0` cross-region DR egress), run `sizing_calculator.py --worksheet`, then set `todo_status` to `"COMPLETED"`. | [sizing_calculator.py](../solution/tools/sizing_calculator.py) | `make TRACK=starter verify-lab LAB=7` |
 | [ ] | **8** | [sql/11_observability_and_studio_viz.sql](sql/11_observability_and_studio_viz.sql) | Author Spanner Studio `RETURN SAFE_TO_JSON(p)` path visualization + `SPANNER_SYS` Query, Lock (microseconds `/ 1000000.0`), and Split-Point introspection queries. | [11_observability_and_studio_viz.sql](../solution/sql/11_observability_and_studio_viz.sql) | `make TRACK=starter verify-lab LAB=8` |
 
 ---
@@ -109,12 +109,12 @@ Open this repository in **Antigravity IDE** — the workspace automatically load
   make TRACK=starter verify-lab LAB=1
   ```
 
-### Lab 2 — Two-Path SDLC Corpus & Bangkok/Singapore Regional Architecture
+### Lab 2 — Two-Path SDLC Corpus & Bangkok Single-Region Architecture
 - **Primary Skills**: [sdlc-graphrag-workshop-guide](../.agents/skills/sdlc-graphrag-workshop-guide/SKILL.md), [spanner-enterprise-platform-ops](../.agents/skills/spanner-enterprise-platform-ops/SKILL.md)
 - **Support Skill**: [spanner-schema-and-data-modeling](../.agents/skills/spanner-schema-and-data-modeling/SKILL.md)
 - **Starter File**: [sql/10_validate_migration_parity.sql](sql/10_validate_migration_parity.sql)
 - **Suggested Antigravity Prompt**:
-  > *"Using the `sdlc-graphrag-workshop-guide` and `spanner-enterprise-platform-ops` skills, complete the `TODO(Lab 2)` 4-tier parity checks in `starter/sql/10_validate_migration_parity.sql` (verifying 68 nodes, 174 explicit rows, 60 dual-projected edges, 45 Markdown docs, `svc-auth` hub in-degree 10, `DATA_FEED`, and legacy `AT_RISK`). Also summarize why Bangkok (`regional-asia-southeast3`) + Singapore (`asia-southeast1`) is our PDPA-compliant topology."*
+  > *"Using the `sdlc-graphrag-workshop-guide` and `spanner-enterprise-platform-ops` skills, complete the `TODO(Lab 2)` 4-tier parity checks in `starter/sql/10_validate_migration_parity.sql` (verifying 68 nodes, 174 explicit rows, 60 dual-projected edges, 45 Markdown docs, `svc-auth` hub in-degree 10, `DATA_FEED`, and legacy `AT_RISK`). Also summarize why Bangkok (`regional-asia-southeast3`) hosts 100% of our Spanner/app/secret/storage stack while Singapore (`asia-southeast1`) is used ONLY for Vertex AI, Model Armor, and Cloud DLP (no 2-region Spanner DR)."*
 - **Verify**:
   ```bash
   make TRACK=starter verify-lab LAB=2
@@ -172,12 +172,12 @@ Open this repository in **Antigravity IDE** — the workspace automatically load
   make TRACK=starter verify-lab LAB=6
   ```
 
-### Lab 7 — Enterprise Sizing, Bangkok/Singapore Pricing & 3-Store Consolidation TCO
+### Lab 7 — Enterprise Sizing, Bangkok Single-Region Pricing & 3-Store Consolidation TCO
 - **Primary Skills**: [spanner-performance-observability-and-sizing](../.agents/skills/spanner-performance-observability-and-sizing/SKILL.md), [spanner-enterprise-platform-ops](../.agents/skills/spanner-enterprise-platform-ops/SKILL.md)
 - **Support Skill**: [sdlc-graphrag-workshop-guide](../.agents/skills/sdlc-graphrag-workshop-guide/SKILL.md)
 - **Starter File**: [tools/customer_scale_worksheet.json](tools/customer_scale_worksheet.json)
 - **Suggested Antigravity Prompt**:
-  > *"Using `spanner-performance-observability-and-sizing`, help me tailor `starter/tools/customer_scale_worksheet.json` for our real SDLC Knowledge Graph scale in Bangkok (`asia-southeast3`) with Singapore DR backup copies (`asia-southeast1`), run `solution/tools/sizing_calculator.py --worksheet starter/tools/customer_scale_worksheet.json`, explain the 1-Yr/3-Yr CUD and SSD→HDD Locality Group savings vs a 3-store stack, and mark `todo_status` as `COMPLETED`."*
+  > *"Using `spanner-performance-observability-and-sizing`, help me tailor `starter/tools/customer_scale_worksheet.json` for our real SDLC Knowledge Graph scale in pure Bangkok single-region Cloud Spanner Enterprise (`asia-southeast3`, `$0` cross-region DR egress), run `solution/tools/sizing_calculator.py --worksheet starter/tools/customer_scale_worksheet.json`, explain the 1-Yr/3-Yr CUD and SSD→HDD Locality Group savings vs a 3-store stack, and mark `todo_status` as `COMPLETED`."*
 - **Verify**:
   ```bash
   make sizing WORKSHEET=starter/tools/customer_scale_worksheet.json REGION=asia-southeast3
@@ -229,9 +229,9 @@ make dry-run-pipelines                                # Offline dry-run of refer
 make demo-mcp-mock                                    # Offline prompt-injection fail-closed demo
 make sizing PRESET=all REGION=asia-southeast3         # Bangkok Enterprise 2026 sizing & 3-store TCO
 make provision-gcp                                    # [LIVE GCP] Provision Bangkok 100-PU Enterprise sandbox
-make verify-live                                      # [LIVE GCP] Run 5-check live Cloud Spanner verification
-make cleanup-gcp                                      # [LIVE GCP] Delete Spanner instances & backups only
-make cleanup-all-gcp                                  # [LIVE GCP] Full teardown (MCP/IAM/DLP/GCS/Spanner) + zero-residual audit
+make verify-live                                      # [LIVE GCP] Run live Bangkok Cloud Spanner verification
+make cleanup-gcp                                      # [LIVE GCP] Delete Bangkok Spanner instance & same-region backups only
+make cleanup-all-gcp                                  # [LIVE GCP] Full teardown (Bangkok MCP/Secrets/SAs/GCS/Spanner + SG DLP/Model Armor) + zero-residual audit
 ```
 
 > **Resetting Your Starter Workspace:** If you want to practice a lab again from scratch, restore any file cleanly with `git checkout -- starter/` (if initialized as a Git repo) or compare side-by-side against `solution/`.

@@ -12,9 +12,12 @@ Unit-tests `solution/tools/sizing_calculator.py` (both Python API and CLI) acros
   2. 1-Year (20% off) and 3-Year (40% off) CUD discounts across all regions/editions.
   3. All 4 T-shirt presets (`workshop`, `small`, `medium`, `large`).
   4. Mandatory production >= 1,000 PU floor & < 65% regional HP CPU threshold.
-  5. Cross-region DR backup copy (Bangkok -> Singapore: $0.08/GiB egress +
-     $0.03432/GiB-mo DR storage).
-  6. Customer worksheet JSON input (`starter/tools/customer_scale_worksheet.json`).
+  5. Default single-region Bangkok architecture (`asia-southeast3`,
+     `dr_backup_region` absent/`none`, `$0.00/mo` cross-region egress, same-region
+     backups at `$0.0315/GiB-mo`), plus optional `--dr-backup-region` override
+     math when explicitly passed (`$0.08/GiB` egress + `$0.03432/GiB-mo` storage).
+  6. Customer worksheet JSON input (`starter/tools/customer_scale_worksheet.json`)
+     defaulting to single-region Bangkok (`dr_backup_region: "none"`).
   7. Legacy 3-store consolidation TCO savings (Infra-Only & Fully Loaded).
 """
 
@@ -91,7 +94,23 @@ class TestSizingCalculator(unittest.TestCase):
         self.assertAlmostEqual(us["storage_per_gib_month_usd"]["backup"], 0.03, places=6)
         self.assertAlmostEqual(us["data_boost_per_1000_spu_hour_usd"], 1.17, places=6)
 
-        # Cross-check exact parity with WORKSHOP_SPEC.json
+        # Cross-check exact parity with WORKSHOP_SPEC.json & single-region architecture flags
+        self.assertTrue(self.spec["defaults"]["spanner_single_region_only"])
+        self.assertEqual(self.spec["defaults"]["primary_region"], "asia-southeast3")
+        self.assertEqual(self.spec["defaults"]["companion_ai_security_region"], "asia-southeast1")
+        self.assertEqual(
+            reg_spec["architecture_mode"],
+            "single_region_bangkok_core_plus_singapore_companion_ai_security",
+        )
+        self.assertEqual(reg_spec["default_cross_region_dr_egress_usd"], 0.0)
+        self.assertEqual(
+            reg_spec["primary_region"]["architecture_role"],
+            "primary_and_only_database_and_app_region",
+        )
+        self.assertEqual(
+            reg_spec["secondary_region"]["architecture_role"],
+            "companion_ai_and_security_only_no_spanner_dr",
+        )
         for rkey, spec_key in (
             ("asia-southeast3", "primary_region"),
             ("asia-southeast1", "secondary_region"),
@@ -147,15 +166,14 @@ class TestSizingCalculator(unittest.TestCase):
         )
 
     def test_four_tshirt_presets_and_workshop_8hr_budget(self) -> None:
-        """All 4 presets (workshop, small, medium, large) match spec bounds and scale monotonically."""
+        """All 4 presets default to single-region Bangkok ($0.00/mo egress) and scale monotonically."""
+        # Default CLI invocation (no --region or --dr-backup-region) must default to single-region Bangkok
         proc = subprocess.run(
             [
                 sys.executable,
                 "solution/tools/sizing_calculator.py",
                 "--preset",
                 "all",
-                "--region",
-                "asia-southeast3",
                 "--json",
             ],
             cwd=str(REPO_ROOT),
@@ -165,10 +183,24 @@ class TestSizingCalculator(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         payload = json.loads(proc.stdout)
+        self.assertEqual(payload["primary_region"], "asia-southeast3")
+        self.assertIsNone(payload["dr_backup_region"])
         scenarios = payload["scenarios"]
         self.assertEqual([s["name"] for s in scenarios], ["workshop", "small", "medium", "large"])
 
         by_name = {s["name"]: s for s in scenarios}
+
+        # Every default scenario runs single-region Bangkok with $0.00/mo cross-region egress
+        for pname, sc in by_name.items():
+            self.assertEqual(sc["inputs"]["region"], "asia-southeast3", f"{pname} region")
+            self.assertIsNone(sc["inputs"]["dr_backup_region"], f"{pname} dr_backup_region")
+            dr_info = sc["spanner_costs"]["dr_backup"]
+            self.assertFalse(dr_info["enabled"], f"{pname} should disable cross-region DR by default")
+            self.assertIsNone(dr_info["dr_backup_region"])
+            self.assertEqual(dr_info["egress_rate_per_gib_usd"], 0.0)
+            self.assertEqual(dr_info["initial_full_copy_egress_usd"], 0.0)
+            self.assertEqual(dr_info["monthly_delta_copy_egress_usd"], 0.0)
+            self.assertEqual(dr_info["total_dr_monthly_recurring_usd"], 0.0)
 
         # Workshop sandbox (100 PU dev/lab only)
         ws = by_name["workshop"]
@@ -288,10 +320,10 @@ class TestSizingCalculator(unittest.TestCase):
             )
 
     def test_dr_backup_copy_bangkok_to_singapore(self) -> None:
-        """Cross-region DR backup copy (Bangkok -> Singapore) bills $0.08/GiB egress + $0.03432/GiB-mo."""
+        """Default single-region Bangkok incurs $0.00 egress; optional --dr-backup-region computes DR math."""
         base_kwargs = dict(
             name="dr_test",
-            label="Bangkok Primary + Singapore DR",
+            label="Bangkok Single-Region vs Optional DR Override",
             nodes=1_000_000,
             edges=5_000_000,
             chunks=2_500_000,
@@ -299,18 +331,26 @@ class TestSizingCalculator(unittest.TestCase):
             write_pct=15.0,
             vector_dim=768,
             cold_hdd_pct=40.0,
-            region="asia-southeast3",
             edition="enterprise",
         )
-        no_dr = self.calc.evaluate_scenario(self.calc.WorkloadSpec(**base_kwargs, dr_backup_region=None))
+        # WorkloadSpec defaults: Bangkok primary (asia-southeast3), dr_backup_region=None
+        default_spec = self.calc.WorkloadSpec(**base_kwargs)
+        self.assertEqual(default_spec.region, "asia-southeast3")
+        self.assertIsNone(default_spec.dr_backup_region)
+
+        no_dr = self.calc.evaluate_scenario(default_spec)
         with_dr = self.calc.evaluate_scenario(
-            self.calc.WorkloadSpec(**base_kwargs, dr_backup_region="asia-southeast1")
+            self.calc.WorkloadSpec(**base_kwargs, region="asia-southeast3", dr_backup_region="asia-southeast1")
         )
         same_reg = self.calc.evaluate_scenario(
-            self.calc.WorkloadSpec(**base_kwargs, dr_backup_region="asia-southeast3")
+            self.calc.WorkloadSpec(**base_kwargs, region="asia-southeast3", dr_backup_region="asia-southeast3")
         )
 
         self.assertFalse(no_dr["spanner_costs"]["dr_backup"]["enabled"])
+        self.assertIsNone(no_dr["spanner_costs"]["dr_backup"]["dr_backup_region"])
+        self.assertEqual(no_dr["spanner_costs"]["dr_backup"]["egress_rate_per_gib_usd"], 0.0)
+        self.assertEqual(no_dr["spanner_costs"]["dr_backup"]["monthly_delta_copy_egress_usd"], 0.0)
+        self.assertEqual(no_dr["spanner_costs"]["dr_backup"]["total_dr_monthly_recurring_usd"], 0.0)
 
         dr = with_dr["spanner_costs"]["dr_backup"]
         total_gib = with_dr["storage"]["total_gib"]
@@ -335,8 +375,61 @@ class TestSizingCalculator(unittest.TestCase):
         # Same-region backup copy incurs $0.00 egress
         self.assertEqual(same_reg["spanner_costs"]["dr_backup"]["egress_rate_per_gib_usd"], 0.0)
 
+        # CLI explicit `--dr-backup-region none` keeps DR disabled ($0.00 egress), while explicit
+        # `--dr-backup-region asia-southeast1` activates optional cross-region DR math
+        cli_none = subprocess.run(
+            [
+                sys.executable,
+                "solution/tools/sizing_calculator.py",
+                "--preset",
+                "medium",
+                "--dr-backup-region",
+                "none",
+                "--json",
+            ],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(cli_none.returncode, 0, cli_none.stderr)
+        none_payload = json.loads(cli_none.stdout)
+        self.assertIsNone(none_payload["dr_backup_region"])
+        self.assertFalse(none_payload["scenarios"][0]["spanner_costs"]["dr_backup"]["enabled"])
+        self.assertEqual(
+            none_payload["scenarios"][0]["spanner_costs"]["dr_backup"]["total_dr_monthly_recurring_usd"],
+            0.0,
+        )
+
+        cli_opt = subprocess.run(
+            [
+                sys.executable,
+                "solution/tools/sizing_calculator.py",
+                "--preset",
+                "medium",
+                "--dr-backup-region",
+                "asia-southeast1",
+                "--json",
+            ],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(cli_opt.returncode, 0, cli_opt.stderr)
+        opt_payload = json.loads(cli_opt.stdout)
+        self.assertEqual(opt_payload["dr_backup_region"], "asia-southeast1")
+        opt_dr = opt_payload["scenarios"][0]["spanner_costs"]["dr_backup"]
+        self.assertTrue(opt_dr["enabled"])
+        self.assertAlmostEqual(opt_dr["egress_rate_per_gib_usd"], 0.08, places=6)
+        self.assertGreater(opt_dr["total_dr_monthly_recurring_usd"], 0.0)
+
     def test_customer_scale_worksheet_json_input(self) -> None:
-        """starter/tools/customer_scale_worksheet.json parses cleanly via API and CLI."""
+        """starter/tools/customer_scale_worksheet.json defaults to single-region Bangkok (dr_backup_region='none')."""
+        raw_ws = json.loads(WORKSHEET_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(raw_ws["region"], "asia-southeast3")
+        self.assertEqual(raw_ws["dr_backup_region"], "none")
+
         ws_dict, meta = self.calc.load_worksheet(WORKSHEET_PATH)
         self.assertEqual(ws_dict["nodes"], 500_000)
         self.assertEqual(ws_dict["edges"], 2_500_000)
@@ -344,7 +437,7 @@ class TestSizingCalculator(unittest.TestCase):
         self.assertEqual(ws_dict["qps"], 180.0)
         self.assertEqual(ws_dict["cold_hdd_pct"], 40.0)
         self.assertEqual(ws_dict["region"], "asia-southeast3")
-        self.assertEqual(ws_dict["dr_backup_region"], "asia-southeast1")
+        self.assertIsNone(ws_dict["dr_backup_region"])
         self.assertIn("todo_status", meta)
 
         proc = subprocess.run(
@@ -363,12 +456,16 @@ class TestSizingCalculator(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         data = json.loads(proc.stdout)
         self.assertEqual(data["mode"], "worksheet")
+        self.assertEqual(data["primary_region"], "asia-southeast3")
+        self.assertIsNone(data["dr_backup_region"])
         self.assertEqual(len(data["scenarios"]), 1)
         sc = data["scenarios"][0]
         self.assertGreaterEqual(sc["compute"]["processing_units"], 1000)
         self.assertLess(sc["compute"]["projected_hp_cpu_pct"], 65.0)
-        self.assertTrue(sc["spanner_costs"]["dr_backup"]["enabled"])
-        self.assertEqual(sc["spanner_costs"]["dr_backup"]["dr_backup_region"], "asia-southeast1")
+        self.assertFalse(sc["spanner_costs"]["dr_backup"]["enabled"])
+        self.assertIsNone(sc["spanner_costs"]["dr_backup"]["dr_backup_region"])
+        self.assertEqual(sc["spanner_costs"]["dr_backup"]["monthly_delta_copy_egress_usd"], 0.0)
+        self.assertEqual(sc["spanner_costs"]["dr_backup"]["total_dr_monthly_recurring_usd"], 0.0)
         self.assertGreater(
             sc["legacy_3_store_tco"]["savings_vs_infra_only"]["spanner_cud_3yr"]["monthly_usd"],
             0.0,
@@ -391,7 +488,7 @@ class TestSizingCalculator(unittest.TestCase):
                     cold_hdd_pct=p["cold_hdd_pct"],
                     region=region,
                     edition="enterprise",
-                    dr_backup_region="asia-southeast1" if region == "asia-southeast3" else None,
+                    dr_backup_region=None,
                 )
                 res = self.calc.evaluate_scenario(spec)
                 tco = res["legacy_3_store_tco"]
@@ -433,13 +530,36 @@ class TestSizingCalculator(unittest.TestCase):
         self.assertLess(med_totals["us-central1"], med_totals["asia-southeast3"])
         self.assertLess(med_totals["asia-southeast3"], med_totals["asia-southeast1"])
 
-        # Verify CLI human-readable report mode runs cleanly
-        proc_txt = subprocess.run(
+        # Verify default CLI human-readable report uses Bangkok single-region ($0.00/mo egress)
+        proc_default = subprocess.run(
             [
                 sys.executable,
                 "solution/tools/sizing_calculator.py",
                 "--preset",
                 "all",
+                "--region",
+                "asia-southeast3",
+            ],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc_default.returncode, 0, proc_default.stderr)
+        self.assertIn("BANGKOK SINGLE-REGION", proc_default.stdout)
+        self.assertIn("Bangkok (asia-southeast3)", proc_default.stdout)
+        self.assertIn("$0.00/mo cross-region egress", proc_default.stdout)
+        self.assertIn("ONLY for Vertex AI", proc_default.stdout)
+        self.assertIn("$1.2915", proc_default.stdout)
+        self.assertNotIn("Optional DR Copy", proc_default.stdout)
+
+        # Verify explicit optional --dr-backup-region CLI report still renders cleanly
+        proc_dr = subprocess.run(
+            [
+                sys.executable,
+                "solution/tools/sizing_calculator.py",
+                "--preset",
+                "medium",
                 "--region",
                 "asia-southeast3",
                 "--dr-backup-region",
@@ -450,10 +570,9 @@ class TestSizingCalculator(unittest.TestCase):
             text=True,
             check=False,
         )
-        self.assertEqual(proc_txt.returncode, 0, proc_txt.stderr)
-        self.assertIn("Bangkok (asia-southeast3)", proc_txt.stdout)
-        self.assertIn("Singapore (asia-southeast1)", proc_txt.stdout)
-        self.assertIn("$1.2915", proc_txt.stdout)
+        self.assertEqual(proc_dr.returncode, 0, proc_dr.stderr)
+        self.assertIn("Optional DR Copy : Singapore (asia-southeast1", proc_dr.stdout)
+        self.assertIn("$0.08/GiB", proc_dr.stdout)
 
 
 if __name__ == "__main__":

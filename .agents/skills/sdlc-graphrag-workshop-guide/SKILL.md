@@ -19,7 +19,7 @@ This skill is the **only** workshop-coupled skill in `.agents/skills/`. It holds
 2. **Verify active GCP context before live commands**: inspect `gcloud config get-value project`, `.env` (`SPANNER_REGION`, `SPANNER_INSTANCE`, `SPANNER_DATABASE`, `VERTEX_AI_LOCATION`), and `env | grep SPANNER_EMULATOR_HOST` so workshop sandbox actions never touch an unrelated production project.
 3. **Keep `solution/` and `data/` intact during participant labs**: solve hands-on exercises exclusively inside `starter/` (`15` `TODO(Lab 1-8)` files). Modifying `data/structured/` edges or `solution/` fixtures breaks deterministic Hero blast-radius parity (`7` rows) and automated tests.
 4. **Never commit secrets or active static API keys**: keep `.env` untracked, and configure MCP Toolbox `embeddingModels.gemini-embedder` using regional Vertex AI (`project` + `location: ${VERTEX_AI_LOCATION}`) via Application Default Credentials / Cloud Run Workload Identity — never an active static `apiKey` in Cloud Run.
-5. **Confirm before teardown or backup deletion**: `make cleanup-gcp` permanently deletes the workshop instance `sdlc-kg-enterprise`, database `sdlc_knowledge_graph`, and Singapore backup copies.
+5. **Confirm before teardown or backup deletion**: `make cleanup-gcp` permanently deletes the workshop instance `sdlc-kg-enterprise`, database `sdlc_knowledge_graph`, and any same-region Bangkok backups.
 
 ## Locked Workshop Defaults & Non-Negotiable Invariants
 
@@ -28,14 +28,14 @@ This skill is the **only** workshop-coupled skill in `.agents/skills/`. It holds
 | Setting | Locked Workshop Default | Production / Architecture Rule |
 | :--- | :--- | :--- |
 | **Fictional Enterprise** | Acme Commerce Platform | 68 nodes, 174 explicit edge rows, 60 dual-projected edges (234 logical), 45 Markdown docs |
-| **Primary Region** | Bangkok (`asia-southeast3` / `regional-asia-southeast3`) | Cloud Spanner **ENTERPRISE**, 3-zone sync quorum (`asia-southeast3-a`, `-b`, `-c`), 99.99% SLA, Thailand PDPA residency |
-| **Secondary / AI & DR Region** | Singapore (`asia-southeast1` / `regional-asia-southeast1`) | ~25 ms RTT: Vertex AI `gemini-embedding-001` & `gemini-2.5-flash`, Model Armor (`modelarmor.asia-southeast1.rep.googleapis.com`), cross-region backup copy DR (`$0.08/GiB`), lab quota fallback |
+| **Primary & ONLY DB/App Region** | Bangkok (`asia-southeast3` / `regional-asia-southeast3`) | Single Cloud Spanner **ENTERPRISE** instance (3-zone sync quorum `asia-southeast3-a/b/c`, 99.99% SLA, Thailand PDPA residency), Cloud Run MCP Toolbox, user-managed Secret Manager, GCS staging & Dataflow, same-region PITR/backups |
+| **Companion Region (Services Unavailable in Bangkok)** | Singapore (`asia-southeast1`, ~25 ms RTT) | Vertex AI (`gemini-embedding-001` & `gemini-2.5-flash`), Model Armor (`modelarmor.asia-southeast1.rep.googleapis.com`), Cloud DLP / Sensitive Data Protection — companion services unavailable in Bangkok ONLY (no Singapore Spanner instance) |
 | **Vertex AI Endpoint Rule** | `VERTEX_AI_LOCATION=asia-southeast1` | `global` fallback applies **strictly** to `gemini-2.5-flash` LLM synthesis — **NEVER** `global` for `gemini-embedding-001` |
 | **Instance / DB / Dialect** | `sdlc-kg-enterprise` / `sdlc_knowledge_graph` / `GOOGLE_STANDARD_SQL` | GoogleSQL is mandatory for Spanner Graph (GQL), `CREATE MODEL`, and `gcloud spanner cli` |
 | **Compute Sizing Floor** | Workshop sandbox: `100` PU (`$1.0332` / 8 hr compute, `~$1.15` total) | Production floor: `>= 1,000` PUs (`>= 1` node) for dedicated zone tasks, Managed Autoscaler, and Remote Functions |
-| **Backup Schedule Default** | Workshop: `--default-backup-schedule-type=NONE` | Production: `AUTOMATIC` + 7-day PITR + `--enable-drop-protection` + Singapore DR backup copy |
+| **Backup Schedule Default** | Workshop: `--default-backup-schedule-type=NONE` | Production: same-region Bangkok `AUTOMATIC` incremental backups + 7-day PITR + `--enable-drop-protection` |
 | **Hero Target API** | `api-payments-charge-v2` (`POST /v2/payments/charge`) | Exposed by `svc-payments` (`team-payments`); deterministic **7** impacted services, **5** ADRs, **5** REQs |
-| **Live-Verified Timings** | Bangkok (`asia-southeast3`, 100 PU) + Singapore (`asia-southeast1`) | Create ~2m · Path A <5s · Path B + 152 SG embeddings ~22s · `apply-postload` ~10m (start before break!) · Hero/SQL/GQL 33–520 ms · Data Boost 3 algos ~3m · Lab 6 deploy ~3–4m · SG DR backup ~6–8m |
+| **Live-Verified Timings** | Bangkok (`asia-southeast3`, 100 PU) + Singapore (`asia-southeast1`) | Create ~2m · Path A <5s · Path B + 152 SG embeddings ~22s · `apply-postload` ~10m (start before break!) · Hero/SQL/GQL 33–520 ms · Data Boost 3 algos ~3m · Lab 6 deploy ~3–4m · `cleanup-all-gcp` ~2m |
 
 ### The 9 Workshop Spanner Invariants (`INV-01`–`INV-09`)
 
@@ -60,7 +60,7 @@ This skill is the **only** workshop-coupled skill in `.agents/skills/`. It holds
 | Confirm starter stubs fail while reference solution passes | `make verify-starter-stubs` and `make TRACK=solution verify-lab LAB=all` | [lab-checkpoints-and-troubleshooting.md](references/lab-checkpoints-and-troubleshooting.md) |
 | Run full 8-module offline test suite and skill validation | `make test` and `make validate-skills` | [lab-checkpoints-and-troubleshooting.md](references/lab-checkpoints-and-troubleshooting.md) |
 | Test Lab 6 MCP persona RBAC & prompt-injection fail-closed | `make demo-mcp-mock` (`solution/mcp/adk_multi_agent_demo.py --mock`) | [acme-sdlc-domain-and-hero-contract.md](references/acme-sdlc-domain-and-hero-contract.md) |
-| Model Bangkok/Singapore sizing, CUDs, HDD tiering & 3-store TCO | `make sizing PRESET=all REGION=asia-southeast3` or `WORKSHEET=starter/tools/customer_scale_worksheet.json` | [acme-sdlc-domain-and-hero-contract.md](references/acme-sdlc-domain-and-hero-contract.md) |
+| Model Bangkok Enterprise sizing, CUDs, HDD tiering & 3-store TCO | `make sizing PRESET=all REGION=asia-southeast3` or `WORKSHEET=starter/tools/customer_scale_worksheet.json` | [acme-sdlc-domain-and-hero-contract.md](references/acme-sdlc-domain-and-hero-contract.md) |
 | Debug workshop SQL, GQL, ScaNN, MCP IAM, or teardown errors | Check symptom → root cause → exact fix | [lab-checkpoints-and-troubleshooting.md](references/lab-checkpoints-and-troubleshooting.md) |
 | Answer general Cloud Spanner design, GQL, Search, or Ops questions | Outside Acme Commerce scope | Route to the matching `spanner-*` sibling skill below |
 
@@ -123,10 +123,9 @@ python3 labs/run_hero_query.py --query B --api-id api-payments-charge-v2
 # 3. Verify live Spanner smoke checks and FGAC role enforcement
 make verify-live
 
-# 4. Optional Singapore DR backup copy, then clean teardown
-bash scripts/provision_workshop_env.sh backup-to-singapore
-make cleanup-gcp          # Spanner instances & backups only
-make cleanup-all-gcp      # Full teardown (MCP/IAM/DLP/GCS/Spanner) + zero-residual audit
+# 4. Clean teardown (single Bangkok Spanner instance + all companion resources)
+make cleanup-gcp          # Bangkok Spanner instance & same-region backups only
+make cleanup-all-gcp      # Full teardown (BKK Cloud Run MCP/Secrets/GCS/Spanner + IAM + SG DLP/Model Armor) + zero-residual audit
 ```
 
 ## Workshop Repository Quick Map
@@ -141,8 +140,8 @@ make cleanup-all-gcp      # Full teardown (MCP/IAM/DLP/GCS/Spanner) + zero-resid
 
 Read the self-contained reference matching your immediate workshop task:
 
-- **[Acme SDLC Domain & Hero Contract](references/acme-sdlc-domain-and-hero-contract.md)**: Complete 68-node / 174-explicit / 60-dual-projected dataset catalog, locked 28-edge dependency graph & 5 topological test traps, exact 7-row Hero `api-payments-charge-v2` blast-radius contract (5 ADRs, 5 REQs, 9 verifiable Markdown citations), three property graph designs (`SdlcGraph`, `SdlcDynamicGraph`, `SdlcAlgoGraph`), dual-layer MCP Toolbox vs FGAC persona RBAC matrix, and verified 2026 Bangkok/Singapore pricing & TCO presets.
-- **[Lab Checkpoints & Troubleshooting](references/lab-checkpoints-and-troubleshooting.md)**: Track A (4-hour) vs Track B (8-hour) delivery matrix, all 15 `starter/` → `solution/` `TODO(Lab 1-8)` checkpoints with exact `scripts/verify_lab.py` assertions, `Makefile` & 8-module `tests/` catalog, live Bangkok/Singapore execution timings, and a 25-item symptom → root-cause → fix troubleshooting runbook covering all live-verified findings.
+- **[Acme SDLC Domain & Hero Contract](references/acme-sdlc-domain-and-hero-contract.md)**: Complete 68-node / 174-explicit / 60-dual-projected dataset catalog, locked 28-edge dependency graph & 5 topological test traps, exact 7-row Hero `api-payments-charge-v2` blast-radius contract (5 ADRs, 5 REQs, 9 verifiable Markdown citations), three property graph designs (`SdlcGraph`, `SdlcDynamicGraph`, `SdlcAlgoGraph`), dual-layer MCP Toolbox vs FGAC persona RBAC matrix, and verified 2026 Bangkok Enterprise pricing & TCO presets.
+- **[Lab Checkpoints & Troubleshooting](references/lab-checkpoints-and-troubleshooting.md)**: Track A (4-hour) vs Track B (8-hour) delivery matrix, all 15 `starter/` → `solution/` `TODO(Lab 1-8)` checkpoints with exact `scripts/verify_lab.py` assertions, `Makefile` & 8-module `tests/` catalog, live Bangkok + Singapore companion execution timings, and a 25-item symptom → root-cause → fix troubleshooting runbook covering all live-verified findings.
 
 ## Routing to the 7 Production Cloud Spanner Skills
 
@@ -150,7 +149,7 @@ Whenever a question goes beyond Acme Commerce workshop specifics into general Cl
 
 | If the task focuses on... | Route to Production Sibling Skill | Primary Workshop Lab(s) |
 | :--- | :--- | :---: |
-| Editions, CUDs, regional/multi-region DR, dialects, KV, Queues, CLI/SDKs, Emulator, autoscaler deployment, PITR/backups | `spanner-enterprise-platform-ops` | Labs 2, 7, 8 |
+| Editions, CUDs, regional/multi-region topologies, dialects, KV, Queues, CLI/SDKs, Emulator, autoscaler deployment, PITR/backups | `spanner-enterprise-platform-ops` | Labs 2, 7, 8 |
 | Split-safe PKs, `INTERLEAVE IN PARENT` vs `INTERLEAVE IN`, secondary/covering/expression indexes, FKs (dual-cascade ban), `CREATE VIEW`/`SECURE_CONTEXT()`, Locality Groups, TTL, Change Streams DDL | `spanner-schema-and-data-modeling` | Lab 3 |
 | `CREATE PROPERTY GRAPH`, 8 graph invariants, dual-projected edges, view-backed & `DYNAMIC LABEL` graphs, ISO GQL (`TRAIL`, `IS_FIRST`, `factorized_mode`), Data Boost Graph Algorithms, `SAFE_TO_JSON` Studio viz | `spanner-graph-modeling-and-gql` | Labs 3, 4, 5, 8 |
 | Vertex AI `CREATE MODEL` + `ML.PREDICT` embeddings, PDML backfills, FTS (`SEARCH`, Custom Dictionaries, fuzzy n-grams), Exact KNN, ScaNN `CREATE VECTOR INDEX`, RRF/RSF/Filtered Hybrid Search, GraphRAG | `spanner-search-ai-and-graphrag` | Labs 4, 5 |

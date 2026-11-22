@@ -3,13 +3,18 @@
 
 100% Python standard library (zero third-party dependencies).
 
-Models unified multi-model Cloud Spanner Enterprise deployments combining:
+Models unified multi-model Cloud Spanner Enterprise deployments anchored on
+Bangkok (`regional-asia-southeast3`, single-region 3-zone synchronous quorum,
+99.99% SLA, Thailand PDPA data residency) + Singapore (`asia-southeast1`) ONLY
+for companion AI/Security services unavailable in Bangkok (Vertex AI, Model
+Armor, Cloud DLP), combining:
   - Spanner Graph (ISO GQL + reverse covering STORING indexes)
   - Full-Text Search (TOKENLIST + Search Index)
   - ScaNN Vector Search (768-dim ARRAY<FLOAT32> embeddings + ScaNN Vector Index)
   - Tiered Storage Locality Groups (SSD -> HDD 5x storage savings)
   - Serverless Data Boost (Graph Algorithms & analytical exports)
-  - Cross-region Disaster Recovery backup copies (e.g., Bangkok -> Singapore)
+  - Same-region Bangkok backups/PITR ($0.0315/GiB-mo, $0.00/mo cross-region egress;
+    optional --dr-backup-region override available for custom DR modeling)
 
 Compares verified 2026 regional Cloud Spanner pricing (On-Demand, 1-Yr CUD,
 3-Yr CUD) against a legacy 3-store architecture (Neo4j Enterprise HA +
@@ -124,8 +129,10 @@ PRICING_REGIONS: Dict[str, Dict[str, Any]] = {
         "intra_region_replication_per_gib_usd": 0.0,
         "workshop_100pu_8hr_compute_usd": 1.0332,
         "residency_note": (
-            "Regional 3-zone synchronous quorum in Bangkok; supports Thailand PDPA "
-            "data residency with $0.00/GiB intra-region replication."
+            "Single-region Bangkok (regional-asia-southeast3) 3-zone synchronous quorum "
+            "(99.99% SLA, Thailand PDPA data residency, same-region backups at "
+            "$0.0315/GiB-mo, $0.00/mo cross-region egress). Singapore (asia-southeast1) "
+            "is used ONLY for Vertex AI, Model Armor & Cloud DLP (unavailable in Bangkok)."
         ),
     },
     "asia-southeast1": {
@@ -173,9 +180,9 @@ PRICING_REGIONS: Dict[str, Dict[str, Any]] = {
         "intra_region_replication_per_gib_usd": 0.0,
         "workshop_100pu_8hr_compute_usd": 1.125696,
         "residency_note": (
-            "Regional 3-zone synchronous quorum in Singapore (~25 ms RTT from Bangkok). "
-            "Companion region for Vertex AI embeddings, cross-region backup copy DR, "
-            "optional async Change Streams DR, or quota fallback."
+            "Companion region in Singapore (~25 ms RTT from Bangkok) used ONLY for "
+            "Vertex AI, Model Armor, and Cloud DLP (unavailable in Bangkok). Spanner "
+            "regional pricing is retained solely for rate comparison or optional override."
         ),
     },
     "us-central1": {
@@ -705,7 +712,7 @@ def calculate_spanner_costs(
     primary_backup_gib = total_gib if spec.enable_primary_backup else 0.0
     primary_backup_mo = primary_backup_gib * backup_rate
 
-    # Optional Cross-Region DR Backup Copy (e.g., Bangkok -> Singapore)
+    # Optional Cross-Region DR Backup Copy (disabled by default: single-region Bangkok backups only)
     dr_info: Dict[str, Any] = {
         "enabled": False,
         "dr_backup_region": None,
@@ -717,7 +724,10 @@ def calculate_spanner_costs(
         "monthly_delta_copy_egress_usd": 0.0,
         "total_dr_monthly_recurring_usd": 0.0,
         "architecture_note": (
-            "Pass --dr-backup-region asia-southeast1 to model cross-region backup copy DR."
+            f"Single-region {region_info['city']} ({region_info['spanner_instance_config']}) "
+            f"backups/PITR ONLY (${backup_rate:.5f}/GiB-mo, $0.00/mo cross-region egress; "
+            "no second Spanner DR instance). Pass --dr-backup-region <region> only to "
+            "model optional cross-region DR."
         ),
     }
     if spec.dr_backup_region is not None:
@@ -737,19 +747,19 @@ def calculate_spanner_costs(
 
         if spec.region == "asia-southeast3" and spec.dr_backup_region == "asia-southeast1":
             arch_note = (
-                "Recommended Southeast Asia DR pattern: regional-asia-southeast3 "
-                "(Bangkok, PDPA resident) primary + cross-region backup copy to "
-                "regional-asia-southeast1 (Singapore, $0.08/GiB egress + "
-                "$0.03432/GiB-mo storage). No pre-built Bangkok+Singapore dual-region exists."
+                "Optional cross-region DR override: regional-asia-southeast3 "
+                "(Bangkok, PDPA resident) -> regional-asia-southeast1 (Singapore, "
+                "$0.08/GiB egress + $0.03432/GiB-mo storage). Default architecture "
+                "uses single-region Bangkok backups only ($0.00/mo egress)."
             )
         elif same_region:
             arch_note = (
-                f"DR backup region matches primary ({spec.region}); $0.00/GiB egress, "
-                "but does not protect against a full regional outage."
+                f"DR backup region matches primary ({spec.region}); $0.00/GiB egress "
+                "(same-region backup copy only)."
             )
         else:
             arch_note = (
-                f"Cross-region backup copy from {spec.region} to {spec.dr_backup_region} "
+                f"Optional cross-region backup copy from {spec.region} to {spec.dr_backup_region} "
                 f"(${egress_rate:.2f}/GiB egress + ${dr_bkp_rate:.5f}/GiB-mo DR storage)."
             )
 
@@ -1327,24 +1337,37 @@ def render_text_report(payload: Mapping[str, Any]) -> str:
     scenarios: List[Dict[str, Any]] = payload["scenarios"]
 
     lines.append(sep)
-    lines.append("CLOUD SPANNER ENTERPRISE — MULTI-MODEL SIZING & 3-STORE TCO CALCULATOR (2026)")
+    if region_key == "asia-southeast3" and not dr_key:
+        lines.append(
+            "CLOUD SPANNER ENTERPRISE — BANGKOK SINGLE-REGION SIZING & 3-STORE TCO CALCULATOR (2026)"
+        )
+    else:
+        lines.append(
+            "CLOUD SPANNER ENTERPRISE — MULTI-MODEL SIZING & 3-STORE TCO CALCULATOR (2026)"
+        )
     lines.append(sep)
     lines.append(
         f"Primary Region   : {reg['city']} ({reg['region']} / {reg['spanner_instance_config']}, "
-        f"{reg['sla']} SLA, {reg['regional_multiplier_vs_us_central1']:.3g}x US)"
+        f"{reg['sla']} SLA, {reg['regional_multiplier_vs_us_central1']:.3g}x US) — SINGLE Spanner instance"
+    )
+    lines.append(
+        "Companion AI/Sec : Singapore (asia-southeast1, ~25 ms RTT) — ONLY for Vertex AI, "
+        "Model Armor & Cloud DLP (unavailable in Bangkok)"
     )
     lines.append(f"Spanner Edition  : {edition.upper()}")
     if dr_key:
         dr_reg = PRICING_REGIONS[dr_key]
         lines.append(
-            f"DR Backup Target : {dr_reg['city']} ({dr_reg['region']} / "
+            f"Optional DR Copy : {dr_reg['city']} ({dr_reg['region']} / "
             f"{dr_reg['spanner_instance_config']}) — "
             f"${CROSS_REGION_BACKUP_EGRESS_ASIA_PER_GIB_USD:.2f}/GiB copy egress + "
             f"${dr_reg['storage_per_gib_month_usd']['backup']:.5f}/GiB-mo backup"
         )
     else:
         lines.append(
-            "DR Backup Target : None (add --dr-backup-region asia-southeast1 for Singapore DR copy)"
+            f"Backup Strategy  : Same-region {reg['city']} backups/PITR ONLY "
+            f"(${reg['storage_per_gib_month_usd']['backup']:.5f}/GiB-mo, "
+            "$0.00/mo cross-region egress; optional --dr-backup-region override available)"
         )
     lines.append(f"Residency Note   : {reg['residency_note']}")
     lines.append("")
@@ -1379,7 +1402,8 @@ def render_text_report(payload: Mapping[str, Any]) -> str:
             f"${r['data_boost_per_1000_spu_hour_usd']:>7.4f}"
         )
     lines.append(
-        f"  * Active primary region | Additional RO Replica ({region_key} Enterprise): "
+        f"  * Active primary region (Singapore & Iowa Spanner rates shown for comparison only) | "
+        f"Additional RO Replica ({region_key} Enterprise): "
         f"${reg['additional_ro_replica_per_node_hour_usd']['enterprise']:.5f}/node-hr | "
         f"Enterprise Plus: ${reg['compute_per_node_hour_usd']['enterprise_plus']:.5f}/node-hr"
     )
@@ -1568,7 +1592,7 @@ def render_text_report(payload: Mapping[str, Any]) -> str:
         lines.append(
             f"  {'Primary Backup Storage':<36}: "
             f"{_fmt_money(smo['primary_backup_usd'])}/mo "
-            f"({'AUTOMATIC' if smo['primary_backup_enabled'] else 'NONE — workshop sandbox'})"
+            f"({'AUTOMATIC same-region, $0.00/mo cross-region egress' if smo['primary_backup_enabled'] else 'NONE — workshop sandbox, $0.00/mo egress'})"
         )
         if dr["enabled"]:
             dr_label = f"Cross-Region DR ({dr['dr_backup_region']})"
@@ -1685,8 +1709,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="sizing_calculator.py",
         description=(
             "Enterprise Sizing & 3-Store Cost TCO Calculator for Cloud Spanner "
-            "Enterprise (Graph + FTS + ScaNN Vector Search). Verified 2026 live "
-            "pricing for Bangkok (asia-southeast3), Singapore (asia-southeast1), "
+            "Enterprise (Graph + FTS + ScaNN Vector Search). Defaults to Bangkok "
+            "single-region (regional-asia-southeast3, same-region backups, $0.00/mo "
+            "cross-region egress) with Singapore (asia-southeast1) ONLY for Vertex AI, "
+            "Model Armor & DLP. Verified 2026 rates for Bangkok, Singapore (comparison), "
             "and Iowa reference (us-central1)."
         ),
     )
@@ -1748,7 +1774,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--dr-backup-region",
         choices=("none", "asia-southeast3", "asia-southeast1", "us-central1"),
         default=None,
-        help="Optional cross-region backup copy destination (e.g., asia-southeast1).",
+        help=(
+            "Optional cross-region DR backup modeling override (default: none — pure "
+            "same-region Bangkok backups at $0.0315/GiB-mo and $0.00/mo egress; pass "
+            "e.g. asia-southeast1 only if explicitly modeling cross-region DR)."
+        ),
     )
     parser.add_argument(
         "--edition",

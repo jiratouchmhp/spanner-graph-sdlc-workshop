@@ -514,8 +514,15 @@ class TestDatasetAndHeroReplay(unittest.TestCase):
         """Copying .env.example and setting GOOGLE_CLOUD_PROJECT=test-proj resolves cleanly everywhere."""
         env_example_text = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
         # .env.example must not set an active literal SPANNER_PROJECT=${GOOGLE_CLOUD_PROJECT}
+        # and must keep strict single-region Bangkok defaults (no legacy DR env defaults)
         self.assertNotIn("\nSPANNER_PROJECT=${GOOGLE_CLOUD_PROJECT}", env_example_text)
         self.assertIn("# SPANNER_PROJECT=", env_example_text)
+        self.assertIn("GOOGLE_CLOUD_REGION=asia-southeast3", env_example_text)
+        self.assertIn("SPANNER_INSTANCE_CONFIG=regional-asia-southeast3", env_example_text)
+        self.assertIn("VERTEX_AI_LOCATION=asia-southeast1", env_example_text)
+        self.assertIn("MODEL_ARMOR_LOCATION=asia-southeast1", env_example_text)
+        self.assertNotIn("SPANNER_SECONDARY_INSTANCE", env_example_text)
+        self.assertNotIn("DR_BACKUP_REGION=asia-southeast1", env_example_text)
 
         copied_env_text = env_example_text.replace(
             "GOOGLE_CLOUD_PROJECT=your-gcp-project-id",
@@ -807,38 +814,14 @@ class TestDatasetAndHeroReplay(unittest.TestCase):
         self.assertEqual(len(fake_hero_db.snapshots[0].sql_calls), 3)
 
     def test_provision_script_spanner_description_length_and_drop_protection_flags(self) -> None:
-        """provision_workshop_env.sh keeps --description within 4-30 chars and updates drop protection on databases."""
+        """provision_workshop_env.sh keeps --description within 4-30 chars, defaults to Bangkok, and updates DB drop protection."""
         import shlex
 
         cases = [
+            (["create", "--project", "demo-proj", "--dry-run"], 1),
             (["create", "--project", "demo-proj", "--region", "asia-southeast3", "--dry-run"], 1),
             (["create", "--project", "demo-proj", "--region", "northamerica-northeast1", "--dry-run"], 1),
-            (
-                [
-                    "backup-to-singapore",
-                    "--project",
-                    "demo-proj",
-                    "--region",
-                    "asia-southeast3",
-                    "--secondary-region",
-                    "asia-southeast1",
-                    "--dry-run",
-                ],
-                1,
-            ),
-            (
-                [
-                    "backup-to-singapore",
-                    "--project",
-                    "demo-proj",
-                    "--region",
-                    "asia-southeast3",
-                    "--secondary-region",
-                    "northamerica-northeast2",
-                    "--dry-run",
-                ],
-                1,
-            ),
+            (["create", "--project", "demo-proj", "--track", "starter", "--dry-run"], 1),
         ]
         for args, expected_create_lines in cases:
             with self.subTest(args=args):
@@ -856,6 +839,7 @@ class TestDatasetAndHeroReplay(unittest.TestCase):
                     if "[DRY-RUN]" in line and "spanner instances create" in line
                 ]
                 self.assertEqual(len(create_lines), expected_create_lines, proc.stdout)
+                self.assertNotIn("sdlc-kg-dr-singapore", proc.stdout)
                 for line in create_lines:
                     tokens = shlex.split(line)
                     desc_tokens = [t for t in tokens if t.startswith("--description=")]
@@ -870,7 +854,7 @@ class TestDatasetAndHeroReplay(unittest.TestCase):
                         f"--description exceeds 30-char Cloud Spanner API limit: {desc_val!r} ({len(desc_val)} chars)",
                     )
 
-        # Verify cleanup disables drop protection via `databases update` (NOT `instances update`)
+        # Verify cleanup disables drop protection via `databases update` (NOT `instances update`) on Bangkok primary only
         cleanup_proc = subprocess.run(
             ["bash", "scripts/provision_workshop_env.sh", "cleanup", "--project", "demo-proj", "--dry-run"],
             cwd=str(REPO_ROOT),
@@ -882,6 +866,7 @@ class TestDatasetAndHeroReplay(unittest.TestCase):
         self.assertIn("spanner databases update", cleanup_proc.stdout)
         self.assertIn("--no-enable-drop-protection", cleanup_proc.stdout)
         self.assertNotIn("spanner instances update", cleanup_proc.stdout)
+        self.assertNotIn("sdlc-kg-dr-singapore", cleanup_proc.stdout)
 
     def test_dynamic_graph_loader_sets_unprefixed_domain_key(self) -> None:
         """neo4j_to_spanner_loader._prepare_dynamic_graph_records sets domain_key == node_id (no label prefix)."""

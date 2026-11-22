@@ -2,8 +2,9 @@
 # =============================================================================
 # Cloud Spanner Enterprise Live GCP End-to-End Verification Script
 # =============================================================================
-# Verifies a live workshop deployment in Bangkok (`regional-asia-southeast3`)
-# or fallback Singapore (`regional-asia-southeast1`) across 5 checks:
+# Verifies a live workshop deployment in Bangkok (`regional-asia-southeast3`,
+# single-region primary, Thailand PDPA resident) with companion Singapore
+# (`asia-southeast1`) Vertex AI embeddings across 5 checks:
 #   1. DDL Describe       : SdlcGraph, DocumentChunks, IdxDocumentChunksEmbedding,
 #                           SdlcSynonymDict, PublicApiCatalogView exist.
 #   2. ScaNN ANN PLAN     : APPROX_COSINE_DISTANCE ... WHERE embedding IS NOT NULL
@@ -11,12 +12,13 @@
 #   3. Live Hero Query B  : labs/run_hero_query.py --query B matches 7-row fixture.
 #   4. FGAC Role Checks   : sdlc_readonly_role can query PublicApiCatalogView and
 #                           is DENIED access to Owners.clearance_tier and INSERT Adrs.
-#   5. Cross-Region DR    : Checks primary and Singapore (asia-southeast1) backups.
+#   5. Residency & Vertex : Confirms Spanner instance config is `regional-${REGION}`
+#                           (Bangkok) and `SdlcTextEmbedding` targets Singapore
+#                           `locations/${VERTEX_AI_LOCATION}/publishers/google/models/gemini-embedding-001`.
 #
 # Usage:
 #   bash scripts/verify_live_gcp.sh --dry-run
 #   GOOGLE_CLOUD_PROJECT=my-proj bash scripts/verify_live_gcp.sh
-#   GOOGLE_CLOUD_PROJECT=my-proj bash scripts/verify_live_gcp.sh --require-dr
 # =============================================================================
 set -euo pipefail
 
@@ -69,12 +71,10 @@ fi
 
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-${SPANNER_PROJECT:-}}"
 REGION="${GOOGLE_CLOUD_REGION:-${SPANNER_REGION:-asia-southeast3}}"
-VERTEX_AI_LOCATION="${VERTEX_AI_LOCATION:-asia-southeast1}"
+VERTEX_AI_LOCATION="${VERTEX_AI_LOCATION:-${VERTEX_AI_EMBEDDING_LOCATION:-asia-southeast1}}"
 SPANNER_INSTANCE="${SPANNER_INSTANCE:-sdlc-kg-enterprise}"
-SPANNER_SECONDARY_INSTANCE="${SPANNER_SECONDARY_INSTANCE:-sdlc-kg-dr-singapore}"
 SPANNER_DATABASE="${SPANNER_DATABASE:-sdlc_knowledge_graph}"
 DRY_RUN="false"
-REQUIRE_DR="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -82,12 +82,10 @@ while [[ $# -gt 0 ]]; do
     --region) REGION="$2"; shift 2 ;;
     --vertex-location) VERTEX_AI_LOCATION="$2"; shift 2 ;;
     --instance) SPANNER_INSTANCE="$2"; shift 2 ;;
-    --dr-instance) SPANNER_SECONDARY_INSTANCE="$2"; shift 2 ;;
     --database) SPANNER_DATABASE="$2"; shift 2 ;;
     --dry-run) DRY_RUN="true"; shift ;;
-    --require-dr) REQUIRE_DR="true"; shift ;;
     -h|--help)
-      echo "Usage: bash scripts/verify_live_gcp.sh [--project ID] [--region REG] [--vertex-location LOC] [--instance ID] [--dr-instance ID] [--database ID] [--require-dr] [--dry-run]"
+      echo "Usage: bash scripts/verify_live_gcp.sh [--project ID] [--region REG] [--vertex-location LOC] [--instance ID] [--database ID] [--dry-run]"
       exit 0
       ;;
     *)
@@ -109,13 +107,16 @@ if [[ -z "${PROJECT_ID}" ]]; then
   fi
 fi
 
+EXPECTED_INSTANCE_CONFIG="regional-${REGION}"
+EXPECTED_MODEL_ENDPOINT="locations/${VERTEX_AI_LOCATION}/publishers/google/models/gemini-embedding-001"
+DDL_OUT=""
+
 echo "=============================================================================="
 echo "Cloud Spanner Enterprise — Live GCP Verification Suite"
 echo "  Mode              : $([[ "${DRY_RUN}" == "true" ]] && echo "DRY-RUN" || echo "LIVE GCP")"
 echo "  Project           : ${PROJECT_ID}"
-echo "  Primary Instance  : ${SPANNER_INSTANCE} (regional-${REGION}) / DB: ${SPANNER_DATABASE}"
-echo "  Vertex AI Region  : ${VERTEX_AI_LOCATION}"
-echo "  DR Target Instance: ${SPANNER_SECONDARY_INSTANCE} (regional-asia-southeast1)"
+echo "  Primary Instance  : ${SPANNER_INSTANCE} (${EXPECTED_INSTANCE_CONFIG}) / DB: ${SPANNER_DATABASE}"
+echo "  Companion VertexAI: ${VERTEX_AI_LOCATION} (Singapore — embeddings & LLM, unavailable in Bangkok)"
 echo "=============================================================================="
 
 # ------------------------------------------------------------------------------
@@ -239,32 +240,40 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# Check 5: Cross-Region Backup DR Copy Check (Bangkok -> Singapore)
+# Check 5: Bangkok Residency & Singapore Vertex AI Remote Model Check
 # ------------------------------------------------------------------------------
 echo ""
-echo "[CHECK 5/5] Checking cross-region backup DR status (${SPANNER_SECONDARY_INSTANCE} in asia-southeast1)..."
+echo "[CHECK 5/5] Verifying Bangkok residency (${EXPECTED_INSTANCE_CONFIG}) & Singapore Vertex AI remote model..."
 if [[ "${DRY_RUN}" == "true" ]]; then
-  echo "[DRY-RUN] gcloud spanner backups list --project=${PROJECT_ID} --instance=${SPANNER_SECONDARY_INSTANCE}"
+  echo "[DRY-RUN] gcloud spanner instances describe ${SPANNER_INSTANCE} --project=${PROJECT_ID} --format=\"value(config.basename())\"  # expect: ${EXPECTED_INSTANCE_CONFIG}"
+  echo "[DRY-RUN] Verify SdlcTextEmbedding remote model targets '${EXPECTED_MODEL_ENDPOINT}' (via gcloud spanner databases ddl describe ${SPANNER_DATABASE} --project=${PROJECT_ID} --instance=${SPANNER_INSTANCE})"
 else
-  if gcloud spanner instances describe "${SPANNER_SECONDARY_INSTANCE}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
-    DR_BKPS="$(gcloud spanner backups list \
-      --project="${PROJECT_ID}" \
-      --instance="${SPANNER_SECONDARY_INSTANCE}" \
-      --format="value(name.basename(),state)" 2>/dev/null || true)"
-    if [[ -n "${DR_BKPS}" ]]; then
-      echo "[PASS] Singapore DR backup(s) found on '${SPANNER_SECONDARY_INSTANCE}':"
-      echo "${DR_BKPS}"
-    elif [[ "${REQUIRE_DR}" == "true" ]]; then
-      echo "[FAIL] No Singapore DR backups found on '${SPANNER_SECONDARY_INSTANCE}' (--require-dr set)." >&2
-      exit 1
-    else
-      echo "[INFO] DR instance exists with 0 backups. Run 'bash scripts/provision_workshop_env.sh backup-to-singapore' for Lab 8 DR proof."
-    fi
-  elif [[ "${REQUIRE_DR}" == "true" ]]; then
-    echo "[FAIL] Singapore DR instance '${SPANNER_SECONDARY_INSTANCE}' not found (--require-dr set)." >&2
-    exit 1
+  ACTUAL_CONFIG="$(gcloud spanner instances describe "${SPANNER_INSTANCE}" \
+    --project="${PROJECT_ID}" \
+    --format="value(config.basename())")"
+  if [[ "${ACTUAL_CONFIG}" == "${EXPECTED_INSTANCE_CONFIG}" ]]; then
+    echo "  [PASS] Spanner instance '${SPANNER_INSTANCE}' config is '${ACTUAL_CONFIG}' (Bangkok single-region residency verified)."
   else
-    echo "[INFO] Optional Singapore DR instance '${SPANNER_SECONDARY_INSTANCE}' not provisioned yet (run backup-to-singapore in Lab 8)."
+    echo "  [FAIL] Spanner instance '${SPANNER_INSTANCE}' config is '${ACTUAL_CONFIG}', expected '${EXPECTED_INSTANCE_CONFIG}'." >&2
+    exit 1
+  fi
+
+  if [[ -z "${DDL_OUT}" ]]; then
+    DDL_OUT="$(gcloud spanner databases ddl describe "${SPANNER_DATABASE}" \
+      --project="${PROJECT_ID}" \
+      --instance="${SPANNER_INSTANCE}")"
+  fi
+  MODEL_DDL_BLOCK="$(awk '/MODEL SdlcTextEmbedding/,/;/' <<< "${DDL_OUT}")"
+  if [[ -z "${MODEL_DDL_BLOCK}" ]]; then
+    echo "  [FAIL] Missing remote model 'SdlcTextEmbedding' in database '${SPANNER_DATABASE}'." >&2
+    exit 1
+  fi
+  if grep -Fq "${EXPECTED_MODEL_ENDPOINT}" <<< "${MODEL_DDL_BLOCK}"; then
+    echo "  [PASS] SdlcTextEmbedding remote model targets '${EXPECTED_MODEL_ENDPOINT}'."
+  else
+    echo "  [FAIL] SdlcTextEmbedding remote model does not target '${EXPECTED_MODEL_ENDPOINT}'." >&2
+    echo "${MODEL_DDL_BLOCK}" >&2
+    exit 1
   fi
 fi
 

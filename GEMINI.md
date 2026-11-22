@@ -4,6 +4,9 @@ Workspace orientation for **Use Case 4**: consolidating **Neo4j Community Editio
 
 - **Single Source of Truth**: [WORKSHOP_SPEC.json](WORKSHOP_SPEC.json) and [WORKSHOP_CONTENT_PLAN.md](WORKSHOP_CONTENT_PLAN.md)
 - **Always-On Guardrails**: [.agents/rules/spanner-graph-workshop.md](.agents/rules/spanner-graph-workshop.md)
+- **Strict Regional Architecture (NO 2-Region Spanner DR)**:
+  - **Primary & Only Database/App Region**: **Bangkok (`asia-southeast3` / `regional-asia-southeast3`)** — single Cloud Spanner Enterprise instance (3-zone sync quorum `a/b/c`, 99.99% SLA, Thailand PDPA data residency, same-region Bangkok backups/PITR), Cloud Run MCP Toolbox, user-managed Secret Manager, GCS staging & Dataflow.
+  - **Companion Region (Fallback ONLY for Services Unavailable in Bangkok)**: **Singapore (`asia-southeast1`, `~25 ms` RTT)** — **ONLY** Vertex AI (`gemini-embedding-001` & `gemini-2.5-flash`), Model Armor (`modelarmor.asia-southeast1.rep.googleapis.com`), and Cloud DLP / Sensitive Data Protection. **No second Singapore Spanner DR instance and no cross-region Spanner backup copy step.**
 - **Dataset Contract**: `68` structured nodes (`Owners` 8, `Services` 12, `Apis` 24, `Adrs` 10, `Requirements` 14), `174` explicit M:N edge rows, `60` dual-projected N:1 edges (`234` total logical edges), and `45` unstructured Markdown documents.
 - **Hero Question**: *"What breaks if we change `POST /v2/payments/charge`?"* (`api-payments-charge-v2`, exposed by `svc-payments` / `team-payments`)
   - **7 Deterministic Impact Rows**: `svc-billing`, `svc-checkout` (`DIRECT_SYNC`, hop 1); `svc-orders`, `svc-partner-gw` (`TRANSITIVE_UPSTREAM`, hop 2); `svc-notifications`, `svc-webhooks` (`TRANSITIVE_UPSTREAM`, hop 3); `svc-analytics` (`DATA_FEED_CONSUMER`, hop 3).
@@ -17,10 +20,10 @@ Workspace orientation for **Use Case 4**: consolidating **Neo4j Community Editio
 | Dimension | Locked Workshop Default & Rule |
 | :--- | :--- |
 | **Dialect & Edition (`INV-01`)** | **GoogleSQL** (`GOOGLE_STANDARD_SQL`) and **Cloud Spanner Enterprise Edition** (`ENTERPRISE`) only (unlocks Spanner Graph, FTS, ScaNN Vector Search, Locality Groups, Managed Autoscaler). |
-| **Primary Region (Bangkok)** | `asia-southeast3` (`regional-asia-southeast3`, 3-zone sync quorum `a/b/c`, 99.99% SLA, Thailand PDPA data residency). Instance `sdlc-kg-enterprise`, DB `sdlc_knowledge_graph`. |
-| **Secondary / AI & DR (Singapore)** | `asia-southeast1` (`regional-asia-southeast1`, ~25 ms RTT): Vertex AI (`VERTEX_AI_LOCATION=asia-southeast1`), Model Armor (`modelarmor.asia-southeast1.rep.googleapis.com`), cross-region Spanner backup DR copy, and lab quota fallback. |
+| **Primary & Only DB/App Region (Bangkok)** | `asia-southeast3` (`regional-asia-southeast3`, 3-zone sync quorum `a/b/c`, 99.99% SLA, Thailand PDPA residency). Single Spanner instance `sdlc-kg-enterprise`, DB `sdlc_knowledge_graph`, same-region Bangkok backups/PITR, Cloud Run MCP, user-managed Secret Manager, GCS & Dataflow. **NO 2-region Spanner DR.** |
+| **Companion AI/Security Region (Singapore)** | `asia-southeast1` (`~25 ms` RTT) — fallback **ONLY** for services unavailable in Bangkok: Vertex AI (`VERTEX_AI_LOCATION=asia-southeast1`), Model Armor (`modelarmor.asia-southeast1.rep.googleapis.com`), and Cloud DLP / Sensitive Data Protection. |
 | **Vertex AI Endpoint Scope** | Use regional `asia-southeast1` for `gemini-embedding-001` and `gemini-2.5-flash`. **Never** target `global` for `gemini-embedding-001` (`global` fallback applies strictly to `gemini-2.5-flash` LLM synthesis). |
-| **Compute & Backup Floor** | Workshop sandbox uses `100` PU (`--default-backup-schedule-type=NONE`); **production requires `>= 1,000` PUs** (1 node) + `AUTOMATIC` backups + 7-day PITR. |
+| **Compute & Backup Floor** | Workshop sandbox uses `100` PU (`--default-backup-schedule-type=NONE`); **production requires `>= 1,000` PUs** (1 node) + same-region Bangkok `AUTOMATIC` backups + 7-day PITR. |
 
 ### Schema, Property Graph, FTS & Vector Invariants (`INV-02`–`INV-09`)
 
@@ -64,12 +67,12 @@ Solve hands-on lab exercises **exclusively inside `starter/`**; leave `data/`, `
 | Lab | Focus | Starter Stub(s) |
 | :-: | :--- | :--- |
 | **1** | Neo4j CE Export & openCypher → ISO GQL Parity | `starter/sql/09_opencypher_to_gql_cookbook.sql` |
-| **2** | Two-Path Corpus & Bangkok/Singapore Parity | `starter/sql/10_validate_migration_parity.sql` |
+| **2** | Two-Path Corpus & Bangkok Single-Region Parity | `starter/sql/10_validate_migration_parity.sql` |
 | **3** | Schema, Post-Load Indexes & Path A/B Ingestion | `starter/sql/{01,03}*.sql`, `starter/pipelines/{neo4j_to_spanner_loader,unstructured_graphrag_ingest}.py` |
 | **4** | Multi-Model Search & Data Boost Graph Algorithms | `starter/sql/05_search_strategies_benchmark.sql`, `starter/sql/08_graph_algorithms_criticality.sql` |
 | **5** | Hybrid RRF/RSF & Hero Blast-Radius GraphRAG | `starter/sql/06_hybrid_rrf_rsf_filtered.sql`, `starter/sql/07_hero_api_blast_radius_graphrag.sql` |
 | **6** | MCP Toolbox, Per-Agent RBAC, FGAC & Model Armor | `starter/sql/04_fgac_roles_views.sql`, `starter/mcp/{tools.yaml,adk_multi_agent_demo.py}` |
-| **7** | Bangkok/Singapore Enterprise Sizing & 3-Store TCO | `starter/tools/customer_scale_worksheet.json` |
+| **7** | Bangkok Single-Region Enterprise Sizing & 3-Store TCO | `starter/tools/customer_scale_worksheet.json` |
 | **8** | Observability, Studio Viz, Pre-Splitting & Teardown | `starter/sql/11_observability_and_studio_viz.sql` |
 
 ## Standard Verification & Lifecycle Commands (All 16 `Makefile` Targets)
@@ -86,13 +89,13 @@ make test                                             # Run all 8 offline stdlib
 make validate-skills                                  # Audit all 8 Antigravity skills, frontmatter & links
 make verify-starter-stubs                             # Confirm all 15 starter stubs fail until completed
 make TRACK=starter verify-lab LAB=1                   # Check starter/ Lab 1..8 progress (MODE=express for 4h Track A)
-make sizing PRESET=all REGION=asia-southeast3         # Run verified 2026 Bangkok/Singapore sizing & 3-store TCO
+make sizing PRESET=all REGION=asia-southeast3         # Run verified 2026 Bangkok single-region sizing & 3-store TCO
 make dry-run-pipelines                                # Stdlib dry-run for Path A & Path B ingestion loaders
 make demo-mcp-mock                                    # Offline persona RBAC & prompt-injection fail-closed demo
 make provision-gcp                                    # [CONFIRM FIRST] Provision Bangkok 100-PU Enterprise sandbox
-make verify-live                                      # [CONFIRM FIRST] Run 5-check live Cloud Spanner verification
-make cleanup-gcp                                      # [CONFIRM FIRST] Delete sandbox instance & Singapore backup copies
-make cleanup-all-gcp                                  # [CONFIRM FIRST] Full teardown (MCP/IAM/DLP/GCS/Spanner) + zero-residual audit
+make verify-live                                      # [CONFIRM FIRST] Run live Bangkok Cloud Spanner verification
+make cleanup-gcp                                      # [CONFIRM FIRST] Delete Bangkok sandbox instance & same-region backups
+make cleanup-all-gcp                                  # [CONFIRM FIRST] Full teardown (Bangkok MCP/Secrets/SAs/GCS/Spanner + SG DLP/Model Armor) + zero-residual audit
 ```
 
 ## Antigravity Skill Routing Table (`.agents/skills/`)
@@ -101,7 +104,7 @@ Skills **#1–#7** are **100% production-reusable** Cloud Spanner skills (zero w
 
 | # | Skill | Scope | Primary Labs | Load When Working On... |
 | :-: | :--- | :---: | :---: | :--- |
-| **1** | [spanner-enterprise-platform-ops](.agents/skills/spanner-enterprise-platform-ops/SKILL.md) | Production | 2, 7, 8 | Editions, CUDs, Bangkok/Singapore DR topology, dialects, KV, Queues, CLI/SDKs/Emulator, autoscaler deployment, PITR, backups, drop protection. |
+| **1** | [spanner-enterprise-platform-ops](.agents/skills/spanner-enterprise-platform-ops/SKILL.md) | Production | 2, 7, 8 | Editions, CUDs, Bangkok single-region 3-zone topology (`99.99%` SLA), dialects, KV, Queues, CLI/SDKs/Emulator, autoscaler deployment, same-region PITR, backups, drop protection. |
 | **2** | [spanner-schema-and-data-modeling](.agents/skills/spanner-schema-and-data-modeling/SKILL.md) | Production | 3 | Split-safe PKs, `INTERLEAVE IN PARENT` vs `INTERLEAVE IN`, secondary/covering/expression indexes, FKs (dual-cascade ban), `CREATE VIEW`/`SECURE_CONTEXT()`, Locality Groups, TTL, Change Streams DDL. |
 | **3** | [spanner-graph-modeling-and-gql](.agents/skills/spanner-graph-modeling-and-gql/SKILL.md) | Production | 3, 4, 5, 8 | `CREATE PROPERTY GRAPH`, 8 graph invariants, dual-projected edges, view-backed & `DYNAMIC LABEL` graphs, ISO GQL (`TRAIL`, `IS_FIRST`, `factorized_mode`), Data Boost Graph Algorithms (`PageRank`, `WCC`, `ShortestPath`), `SAFE_TO_JSON` Studio viz. |
 | **4** | [spanner-search-ai-and-graphrag](.agents/skills/spanner-search-ai-and-graphrag/SKILL.md) | Production | 4, 5 | Vertex AI `CREATE MODEL`/`ML.PREDICT` embeddings (`asia-southeast1`), PDML backfills, FTS (`SEARCH`, Custom Dictionaries, fuzzy n-grams), Exact KNN, ScaNN `CREATE VECTOR INDEX`, RRF (`UNNEST(ARRAY(...)) WITH OFFSET`)/RSF/filtered hybrid search, GraphRAG. |

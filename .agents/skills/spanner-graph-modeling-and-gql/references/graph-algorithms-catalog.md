@@ -10,9 +10,9 @@ Authoritative reference for Cloud Spanner **Graph Algorithms** (Preview; Enterpr
 - **Invocation Channels**: Executed as built-in GQL `CALL` / `CALL PER ()` statements via Google Cloud console, `gcloud`, client libraries, REST, or RPC APIs.
 - **Serverless Processing Unit (SPU) Billing & Idle Trap**:
   - Billed strictly per **SPU** consumed while algorithm compute is active — **CRITICAL**: compute remains **billable while idle** during `max_idle_time` (default `'30m'`). Track costs in Cloud Billing Reports by filtering SKUs to regional **Data Boost**.
-  - **Bangkok Primary (`regional-asia-southeast3`)**: **`$1.2285 / 1,000 SPU-hr`**
-  - **Singapore Secondary (`regional-asia-southeast1`)**: **`$1.33848 / 1,000 SPU-hr`**
+  - **Bangkok Single-Region Primary (`regional-asia-southeast3`)**: **`$1.2285 / 1,000 SPU-hr`**
   - **US Reference (`regional-us-central1`)**: **`$1.17 / 1,000 SPU-hr`**
+  - *(Other APAC regions vary by regional multiplier, e.g., `regional-asia-southeast1` at `$1.33848 / 1,000 SPU-hr`.)*
 - **Least-Privilege IAM (Live-Verified Gotchas)**:
   - **Caller Role (Mandatory Even for Project Owners!)**: The invoking principal **MUST** explicitly hold `roles/spanner.graphIntelligenceUser` (grants `spanner.databases.runGraphAlgorithms` and includes `roles/spanner.databaseReaderWithDataBoost`). **Even `roles/owner` does NOT include `spanner.databases.useDataBoost`** and fails with `PERMISSION_DENIED` until `roles/spanner.graphIntelligenceUser` is bound.
   - **Spanner Write-Back (`format = 'CLOUD_SPANNER'`)**: Grant database-level **`roles/spanner.databaseUser` + `roles/spanner.graphIntelligenceUser`** to the Google-managed Spanner service agent `service-{project_number}@gcp-sa-spanner.iam.gserviceaccount.com` so Data Boost can write results back into the destination Spanner table.

@@ -35,11 +35,13 @@ provides four SQL/application integration paths:
   2. **Spanner compute capacity** for executing queries and joining results.
   3. **Spanner network egress** between the Spanner query region and the Vertex
      AI endpoint region.
-- **Regional Topology Example (Southeast Asia):** When your Spanner Enterprise
-  instance runs in Bangkok (`regional-asia-southeast3`, 3-zone 99.99% SLA,
-  \$1.2915/node-hr) for data residency and invokes Vertex AI regional endpoints
-  in Singapore (`asia-southeast1`, ~25 ms RTT), cross-region Spanner-to-Vertex-AI
-  transfer applies. Always choose the same region or nearest continent region.
+- **Regional Topology Example (Southeast Asia):** When your single-region
+  Spanner Enterprise instance runs in Bangkok (`regional-asia-southeast3`,
+  3-zone 99.99% SLA, \$1.2915/node-hr) for data residency and invokes companion
+  Vertex AI regional endpoints in Singapore (`asia-southeast1`, ~25 ms RTT,
+  used because Vertex AI is unavailable in `asia-southeast3`), cross-region
+  Spanner-to-Vertex-AI transfer applies. Always choose the same region or
+  nearest companion region.
 - **Hard I/O Constraint:** Vertex AI model inputs and outputs must be **JSON
   objects**.
 

@@ -6,8 +6,10 @@ Audits `README.md`, `WORKSHOP_CONTENT_PLAN.md`, `GEMINI.md`, and `docs/00..08.md
   2. Zero broken local Markdown links across all 12 documentation files.
   3. Zero internal-tooling or corporate-domain leaks across docs, spec, and Makefile.
   4. Exact alignment with `WORKSHOP_SPEC.json`:
-       - Primary region Bangkok (`asia-southeast3` / `regional-asia-southeast3`)
-       - Secondary region Singapore (`asia-southeast1`)
+       - Primary & ONLY database/app region Bangkok (`asia-southeast3` / `regional-asia-southeast3`,
+         `spanner_single_region_only: true`, `$0.00/mo` default cross-region DR egress)
+       - Companion AI/Security-only region Singapore (`asia-southeast1` for Vertex AI,
+         Model Armor & Cloud DLP unavailable in Bangkok)
        - Verified 2026 pricing figures in `docs/07_sizing_and_cost_tco.md`
        - All 8 Antigravity skill names in root docs & per-lab primary skills in `docs/01..08.md`
        - Hero API (`api-payments-charge-v2`, `POST /v2/payments/charge`), 7 impacted services,
@@ -143,14 +145,31 @@ class TestDocsConsistency(unittest.TestCase):
                     f"Internal leak ({label}) in {rel}: {match.group(0)!r}" if match else "",
                 )
 
-    def test_regional_defaults_bangkok_primary_singapore_secondary_and_pricing_alignment(self) -> None:
-        """Docs match WORKSHOP_SPEC.json Bangkok primary, Singapore secondary, and 2026 pricing."""
-        primary_region = self.spec["defaults"]["google_cloud_region"]
-        secondary_region = self.spec["defaults"]["google_cloud_secondary_region"]
-        primary_cfg = self.spec["defaults"]["spanner_instance_config"]
+    def test_regional_defaults_bangkok_primary_singapore_companion_and_pricing_alignment(self) -> None:
+        """Docs match WORKSHOP_SPEC.json Bangkok single-region primary, Singapore AI/Security companion, and 2026 pricing."""
+        defaults = self.spec["defaults"]
+        reg_arch = self.spec["regional_architecture"]
+        primary_region = defaults["primary_region"]
+        companion_region = defaults["companion_ai_security_region"]
+        primary_cfg = defaults["spanner_instance_config"]
         self.assertEqual(primary_region, "asia-southeast3")
-        self.assertEqual(secondary_region, "asia-southeast1")
+        self.assertEqual(defaults["google_cloud_region"], "asia-southeast3")
+        self.assertEqual(companion_region, "asia-southeast1")
         self.assertEqual(primary_cfg, "regional-asia-southeast3")
+        self.assertTrue(defaults["spanner_single_region_only"])
+        self.assertEqual(
+            reg_arch["architecture_mode"],
+            "single_region_bangkok_core_plus_singapore_companion_ai_security",
+        )
+        self.assertEqual(reg_arch["default_cross_region_dr_egress_usd"], 0.0)
+        self.assertEqual(
+            reg_arch["primary_region"]["architecture_role"],
+            "primary_and_only_database_and_app_region",
+        )
+        self.assertEqual(
+            reg_arch["secondary_region"]["architecture_role"],
+            "companion_ai_and_security_only_no_spanner_dr",
+        )
 
         # Every root doc and every docs/00..08.md must reference Bangkok primary asia-southeast3
         for rel, text in self.texts.items():
@@ -160,7 +179,7 @@ class TestDocsConsistency(unittest.TestCase):
                 f"{rel} missing primary Bangkok region '{primary_region}'",
             )
 
-        # Root docs and secondary-region architecture guides must reference Singapore asia-southeast1
+        # Root docs and AI/Security/sizing architecture guides must reference Singapore asia-southeast1
         sg_required_docs = [
             "README.md",
             "WORKSHOP_CONTENT_PLAN.md",
@@ -175,18 +194,19 @@ class TestDocsConsistency(unittest.TestCase):
         ]
         for rel in sg_required_docs:
             self.assertIn(
-                secondary_region,
+                companion_region,
                 self.texts[rel],
-                f"{rel} missing secondary Singapore region '{secondary_region}'",
+                f"{rel} missing companion Singapore AI/Security region '{companion_region}'",
             )
 
-        # Root docs explicitly reference regional-asia-southeast3 & Bangkok
+        # Root docs explicitly reference regional-asia-southeast3 & Bangkok + companion Singapore AI/Security
         for rel in self.root_docs:
             self.assertIn(primary_cfg, self.texts[rel])
             self.assertIn("Bangkok", self.texts[rel])
             self.assertIn("Singapore", self.texts[rel])
+            self.assertNotIn("DR_BACKUP_REGION=asia-southeast1", self.texts[rel])
 
-        # Lab 7 sizing guide matches verified 2026 Bangkok, Singapore & Iowa pricing schedule
+        # Lab 7 sizing guide matches verified 2026 Bangkok, Singapore (rate benchmark) & Iowa pricing schedule
         doc07 = self.texts["docs/07_sizing_and_cost_tco.md"]
         for expected_rate in ("1.2915", "0.315", "0.063", "1.2285", "1.40712", "0.3432", "1.23"):
             self.assertIn(
@@ -261,7 +281,7 @@ class TestDocsConsistency(unittest.TestCase):
             f"missing={sorted(spec_targets - makefile_targets)}",
         )
 
-        # README.md and GEMINI.md must document all 11 Makefile targets
+        # README.md and GEMINI.md must document all 16 Makefile targets
         for rel in ("README.md", "GEMINI.md"):
             text = self.texts[rel]
             for target in spec_targets:

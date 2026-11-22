@@ -5,7 +5,7 @@ Production reference for Cloud Spanner physical storage mechanics, table interle
 ## 1. Physical Storage Architecture, Splits & Locality
 
 - **Lexicographic Key Ordering:** Every table's rows are physically sorted lexicographically by the concatenation of `PRIMARY KEY` columns in declaration order. Adjacent keys live in the same disk blocks and share block cache locality.
-- **Replication & Splits:** Each zone in a regional instance (for example, `regional-asia-southeast3` across `asia-southeast3-a`, `asia-southeast3-b`, and `asia-southeast3-c`, or `regional-asia-southeast1` across `asia-southeast1-a`, `asia-southeast1-b`, and `asia-southeast1-c`) stores a complete replica partitioned across compute nodes in that zone.
+- **Replication & Splits:** Each zone in a regional instance (for example, `regional-asia-southeast3` across `asia-southeast3-a`, `asia-southeast3-b`, and `asia-southeast3-c`) stores a complete replica partitioned across compute nodes in that zone.
   - Physical hierarchy: **Database Splits** (contiguous key ranges bounded by *split boundaries*; **split size limit = `8 GiB`**) -> **Blocks**.
   - Splits dynamically split, merge, and move across servers based on **size** and **load** (*load-based splitting*).
   - **Cross-Split 2PC Penalty:** Transactions touching multiple splits automatically execute **two-phase commit (2PC)**, adding CPU and latency—even if both splits are currently served by the same node.

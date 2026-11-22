@@ -9,8 +9,10 @@
 #   1. Python >= 3.10 & `.venv` PEP-668-safe virtualenv status
 #   2. `gcloud` CLI availability, active account auth & ADC status
 #   3. Active GCP project safety (warns if unset, placeholder, or shared/prod)
-#   4. Locked regional env defaults: Bangkok (`asia-southeast3`) primary +
-#      Singapore (`asia-southeast1`) Vertex AI / Model Armor / DR (INV-09)
+#   4. Strict regional env defaults: Bangkok (`asia-southeast3`) primary
+#      (Spanner, Cloud Run, Secrets, GCS) + Singapore (`asia-southeast1`)
+#      ONLY for AI/Security services unavailable in Bangkok (Vertex AI,
+#      Model Armor, DLP; INV-09)
 #   5. MCP Toolbox native binary or `npx` availability
 #   6. Docker availability (with clear Zero-Docker path confirmation)
 #
@@ -81,7 +83,6 @@ fi
 STRICT_GCP="false"
 PROJECT_OVERRIDE=""
 REGION="${GOOGLE_CLOUD_REGION:-${SPANNER_REGION:-asia-southeast3}}"
-SECONDARY_REGION="${GOOGLE_CLOUD_SECONDARY_REGION:-asia-southeast1}"
 VERTEX_AI_LOCATION="${VERTEX_AI_LOCATION:-${VERTEX_AI_EMBEDDING_LOCATION:-asia-southeast1}}"
 MODEL_ARMOR_LOCATION="${MODEL_ARMOR_LOCATION:-asia-southeast1}"
 SPANNER_INSTANCE="${SPANNER_INSTANCE:-sdlc-kg-enterprise}"
@@ -93,13 +94,13 @@ usage() {
 Usage: bash scripts/preflight_check.sh [OPTIONS]
 
 Options:
-  --strict-gcp              Exit non-zero if gcloud/ADC is unauthenticated,
-                            active project is unset/placeholder, or Python < 3.10
-  --project <id>            Override GCP project ID to check
-  --region <region>         Primary Spanner region (default: asia-southeast3)
-  --secondary-region <reg>  Secondary AI/DR region (default: asia-southeast1)
-  --vertex-location <loc>   Regional Vertex AI endpoint (default: asia-southeast1)
-  -h, --help                Show this help message
+  --strict-gcp                  Exit non-zero if gcloud/ADC is unauthenticated,
+                                active project is unset/placeholder, or Python < 3.10
+  --project <id>                Override GCP project ID to check
+  --region <region>             Primary region for Spanner, Cloud Run, Secrets & GCS (default: asia-southeast3)
+  --vertex-location <loc>       Companion regional Vertex AI endpoint (default: asia-southeast1)
+  --model-armor-location <loc>  Companion regional Model Armor & DLP endpoint (default: asia-southeast1)
+  -h, --help                    Show this help message
 EOF
 }
 
@@ -125,20 +126,20 @@ while [[ $# -gt 0 ]]; do
       REGION="$2"
       shift 2
       ;;
-    --secondary-region)
-      if [[ $# -lt 2 ]]; then
-        echo "[ERROR] --secondary-region requires a value." >&2
-        exit 1
-      fi
-      SECONDARY_REGION="$2"
-      shift 2
-      ;;
     --vertex-location)
       if [[ $# -lt 2 ]]; then
         echo "[ERROR] --vertex-location requires a value." >&2
         exit 1
       fi
       VERTEX_AI_LOCATION="$2"
+      shift 2
+      ;;
+    --model-armor-location)
+      if [[ $# -lt 2 ]]; then
+        echo "[ERROR] --model-armor-location requires a value." >&2
+        exit 1
+      fi
+      MODEL_ARMOR_LOCATION="$2"
       shift 2
       ;;
     -h|--help)
@@ -343,33 +344,27 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 4. Bangkok (asia-southeast3) & Singapore (asia-southeast1) Regional Defaults
+# 4. Bangkok (asia-southeast3) Primary & Singapore (asia-southeast1) Companion
 # ------------------------------------------------------------------------------
 echo ""
-echo "[4/6] Regional Architecture Defaults (Bangkok Primary + Singapore AI/DR)"
+echo "[4/6] Regional Architecture Defaults (Bangkok Single-Region Primary + Singapore AI/Security)"
 
 if [[ "${REGION}" == "asia-southeast3" ]]; then
-  log_pass "Primary Spanner & Cloud Run region: ${REGION} (Bangkok — regional-asia-southeast3, Thailand PDPA resident)"
-elif [[ "${REGION}" == "asia-southeast1" ]]; then
-  log_info "Primary Spanner region overridden to fallback: ${REGION} (Singapore — regional-asia-southeast1)"
+  log_pass "Primary region (Spanner, Cloud Run, Secrets, GCS): asia-southeast3 (Bangkok) — regional-asia-southeast3, 3-zone sync quorum, Thailand PDPA resident"
 else
-  log_warn "Primary Spanner region set to non-default '${REGION}' (workshop locked default: asia-southeast3 Bangkok)"
-fi
-
-if [[ "${SECONDARY_REGION}" == "asia-southeast1" ]]; then
-  log_pass "Secondary DR & companion region: ${SECONDARY_REGION} (Singapore — regional-asia-southeast1)"
-else
-  log_info "Secondary DR region overridden to '${SECONDARY_REGION}' (workshop default: asia-southeast1 Singapore)"
+  log_warn "Primary region (Spanner, Cloud Run, Secrets, GCS) set to non-default '${REGION}' (strict workshop default: asia-southeast3 Bangkok)"
 fi
 
 vertex_lower="${VERTEX_AI_LOCATION,,}"
 if [[ "${vertex_lower}" == "global" || "${vertex_lower}" == "us" || "${vertex_lower}" == "eu" ]]; then
   log_fail_strict "INV-09 violation: VERTEX_AI_LOCATION='${VERTEX_AI_LOCATION}' is invalid for gemini-embedding-001. Set VERTEX_AI_LOCATION=asia-southeast1."
+elif [[ "${VERTEX_AI_LOCATION}" == "${MODEL_ARMOR_LOCATION}" ]]; then
+  log_pass "Companion region (AI/Security services unavailable in Bangkok): ${VERTEX_AI_LOCATION} (Vertex AI, Model Armor, DLP) — ~25 ms RTT, INV-09 compliant"
 else
-  log_pass "Vertex AI regional endpoint: ${VERTEX_AI_LOCATION} (INV-09 compliant for gemini-embedding-001) | Model Armor: ${MODEL_ARMOR_LOCATION}"
+  log_pass "Companion region (AI/Security services unavailable in Bangkok): Vertex AI=${VERTEX_AI_LOCATION} (INV-09 compliant), Model Armor & DLP=${MODEL_ARMOR_LOCATION}"
 fi
 
-log_info "Sandbox target: instance=${SPANNER_INSTANCE} | db=${SPANNER_DATABASE} | PUs=${SPANNER_PROCESSING_UNITS} (~\$1.15/8h workshop)"
+log_info "Sandbox target: instance=${SPANNER_INSTANCE} (regional-${REGION}, single-region backups only) | db=${SPANNER_DATABASE} | PUs=${SPANNER_PROCESSING_UNITS} (~\$1.15/8h workshop)"
 
 # ------------------------------------------------------------------------------
 # 5. MCP Toolbox Binary or npx Availability

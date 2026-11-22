@@ -103,13 +103,17 @@ class TestAntigravitySkills(unittest.TestCase):
         expected_dirs = sorted(s["name"] for s in self.manifest)
         self.assertEqual(actual_dirs, expected_dirs)
 
-        # Always-on rule file check
+        # Always-on rule file check (trigger + Bangkok single-region guardrail)
         self.assertTrue(RULE_PATH.is_file(), "Missing .agents/rules/spanner-graph-workshop.md")
         rule_text = RULE_PATH.read_text(encoding="utf-8")
         fm_m = FRONTMATTER_RE.match(rule_text)
         self.assertIsNotNone(fm_m, "Always-on rule missing YAML frontmatter")
         rule_fm = yaml.safe_load(fm_m.group(1))
         self.assertEqual(rule_fm.get("trigger"), "always_on")
+        self.assertIn("regional-asia-southeast3", rule_text)
+        self.assertIn("asia-southeast1", rule_text)
+        for forbidden_dr in ("backup-to-singapore", "sdlc-kg-dr-singapore", "SPANNER_SECONDARY_INSTANCE"):
+            self.assertNotIn(forbidden_dr, rule_text)
 
         # Run scripts/setup_antigravity_skills.sh
         proc = subprocess.run(
@@ -274,8 +278,27 @@ class TestAntigravitySkills(unittest.TestCase):
                 combined = "\n".join(
                     p.read_text(encoding="utf-8") for p in sorted(sdir.rglob("*.md"))
                 )
-                for expected_token in ("Acme Commerce", "api-payments-charge-v2", "SdlcGraph", "TODO(Lab"):
+                for expected_token in (
+                    "Acme Commerce",
+                    "api-payments-charge-v2",
+                    "SdlcGraph",
+                    "TODO(Lab",
+                    "asia-southeast3",
+                    "asia-southeast1",
+                ):
                     self.assertIn(expected_token, combined)
+                for forbidden_dr in (
+                    "backup-to-singapore",
+                    "sdlc-kg-dr-singapore",
+                    "SPANNER_SECONDARY_INSTANCE",
+                    "--require-dr",
+                    "DR_BACKUP_REGION=asia-southeast1",
+                ):
+                    self.assertNotIn(
+                        forbidden_dr,
+                        combined,
+                        f"Workshop guide skill must not reference removed DR token {forbidden_dr!r}",
+                    )
 
     def test_spanner_instance_create_descriptions_within_api_length_bounds(self) -> None:
         """Every gcloud spanner instances create --description in skills stays within 4-30 chars."""

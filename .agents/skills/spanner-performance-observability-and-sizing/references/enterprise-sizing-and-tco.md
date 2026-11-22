@@ -1,6 +1,6 @@
 # Enterprise Sizing, Benchmarks, Tiered Storage & Regional TCO
 
-Authoritative reference for Cloud Spanner peak per-node throughput, `max_commit_delay` write batching, DML/mutation/service quotas, compute & storage capacity limits, Tiered Storage (SSD/HDD), Columnar Engine, failover CPU & autoscaler target tuning, verified Bangkok (`asia-southeast3`) and Singapore (`asia-southeast1`) 2026 pricing, worked node-sizing math, and 3-store consolidation TCO modeling.
+Authoritative reference for Cloud Spanner peak per-node throughput, `max_commit_delay` write batching, DML/mutation/service quotas, compute & storage capacity limits, Tiered Storage (SSD/HDD), Columnar Engine, failover CPU & autoscaler target tuning, verified Bangkok (`asia-southeast3`) single-region 2026 pricing (with reference regional rates), worked node-sizing math, and 3-store consolidation TCO modeling.
 
 ---
 
@@ -10,7 +10,7 @@ Authoritative reference for Cloud Spanner peak per-node throughput, `max_commit_
 
 | Configuration Type | Peak Reads (QPS / region / node) | Peak Standard Writes (QPS total / node) | Peak Writes w/ Batching (`100 ms` delay, QPS total / node) |
 | :--- | :--- | :--- | :--- |
-| **Regional** (e.g., `regional-asia-southeast3` Bangkok, `regional-asia-southeast1` Singapore) | **SSD: 22,500**<br>HDD: 1,500 | **SSD: 3,500**<br>HDD: 3,500 | **SSD: 22,500**<br>HDD: 22,500 |
+| **Regional** (e.g., `regional-asia-southeast3` Bangkok, `regional-us-central1` Iowa) | **SSD: 22,500**<br>HDD: 1,500 | **SSD: 3,500**<br>HDD: 3,500 | **SSD: 22,500**<br>HDD: 22,500 |
 | **Regional Optional Read-Only Replica** | **SSD: +7,500**<br>HDD: +500 | — | — |
 | **Dual-Region & Multi-Region** (e.g., `dual-region-japan1`, `asia1`, `asia2`, `nam3`, `eur6`) | **SSD: 15,000** (7,500 per optional RO replica or 1-replica regions)<br>HDD: 1,000 (500 RO) | **SSD: 2,700** *(3-continent e.g. `nam-eur-asia1`: 1,500)*<br>HDD: 2,700 | **SSD: 15,000**<br>HDD: 15,000 |
 
@@ -146,18 +146,18 @@ gcloud spanner instances create "{instance_id}" \
 
 ---
 
-## 5. Bangkok (`asia-southeast3`) & Singapore (`asia-southeast1`) Pricing & 3-Store TCO
+## 5. Bangkok (`asia-southeast3`) Single-Region Pricing & 3-Store TCO
 
-### Regional Topology & Companion Roles
+### Regional Topology & Companion Service Roles
 
-- **Primary Region — Bangkok, Thailand (`asia-southeast3` / `regional-asia-southeast3`)**: 3-zone synchronous Paxos quorum (`asia-southeast3-a`, `asia-southeast3-b`, `asia-southeast3-c`), **99.99% SLA**, Thailand PDPA data residency, **`$0.00/GiB`** intra-region replication, **Enterprise** edition recommended for unified Graph + FTS + Vector + Tiered Storage + Managed Autoscaler.
-- **Secondary Companion Region — Singapore (`asia-southeast1` / `regional-asia-southeast1`)**:
-  - **No Pre-Built Dual-Region**: Cloud Spanner does not currently offer a pre-built dual-region or multi-region pairing `asia-southeast3` + `asia-southeast1` (dual-regions cover AU/CA/DE/IN/JP; `asia2` pairs Mumbai/Delhi/Singapore).
-  - **Four Production Companion Roles**: (1) Regional Vertex AI embedding & GenAI endpoints (`~25 ms` RTT from Bangkok); (2) Cross-region DR backup copy (`gcloud spanner backups copy`, `$0.08/GiB` Asia egress + `$0.03432/GiB-mo` Singapore backup storage); (3) Optional warm/passive async DR instance via Change Streams + Dataflow; (4) Secondary quota fallback region.
+- **Primary & ONLY Database/App Region — Bangkok, Thailand (`asia-southeast3` / `regional-asia-southeast3`)**: Single regional Cloud Spanner **Enterprise** instance with 3-zone synchronous Paxos quorum (`asia-southeast3-a`, `asia-southeast3-b`, `asia-southeast3-c`), **99.99% SLA**, Thailand PDPA data residency, **`$0.00/GiB`** intra-region replication, co-located Cloud Run, user-managed Secret Manager, GCS staging, Dataflow, and same-region 7-day PITR + incremental backups.
+- **Companion Region ONLY for Unavailable Services — Singapore (`asia-southeast1`, ~25 ms RTT)**:
+  - **No Pre-Built Dual-Region**: Cloud Spanner does not offer a pre-built dual-region or multi-region pairing `asia-southeast3` + `asia-southeast1` (dual-regions cover AU/CA/DE/IN/JP; `asia2` pairs Mumbai/Delhi/Singapore).
+  - **Strictly Companion AI & Security Services**: Route to `asia-southeast1` **only** for GCP services unavailable in Bangkok: (1) Vertex AI embeddings & GenAI (`gemini-embedding-001`, `gemini-2.5-flash`); (2) Model Armor (`modelarmor.asia-southeast1.rep.googleapis.com`); and (3) Cloud DLP / Sensitive Data Protection companion inspection templates—not a second Spanner DR instance.
 
 ### Verified 2026 Pricing Schedule (USD, 730 Hours/Month)
 
-| Pricing Dimension | `us-central1` (1.00×) | `asia-southeast3` Bangkok (**1.05×**) | `asia-southeast1` Singapore (**1.144×**) |
+| Pricing Dimension | `us-central1` (1.00×) | `asia-southeast3` Bangkok Primary (**1.05×**) | `asia-southeast1` Reference APAC (**1.144×**) |
 | :--- | ---: | ---: | ---: |
 | **Standard Compute** (node-hr / node-mo) | `$0.9000` / `$657.00` | **`$0.9450` / `$689.85`** | `$1.0296` / `$751.61` |
 | **Enterprise Compute** (node-hr / node-mo) | `$1.2300` / `$897.90` | **`$1.2915` / `$942.80`** | `$1.40712` / `$1,027.20` |
@@ -172,7 +172,7 @@ gcloud spanner instances create "{instance_id}" \
 | **HDD Storage** (per GiB-month, **5× cheaper**) | `$0.0600` | **`$0.0630`** | `$0.06864` |
 | **Backup Storage** (per GiB-month) | `$0.0300` | **`$0.0315`** | `$0.03432` |
 | **Data Boost** (per 1,000 SPU-hour) | `$1.1700` | **`$1.2285`** | `$1.33848` |
-| **Cross-Region Backup Copy Egress (Asia)** | — | **`$0.0800 / GiB`** | **`$0.0800 / GiB`** |
+| **Intra-Region Replication & Same-Region Backups** | `$0.0000 / GiB` | **`$0.0000 / GiB`** | `$0.0000 / GiB` |
 | **Dev/Sandbox (100 PU × 8 hrs, Enterprise)** | `$0.9840` | **`$1.0332`** | `$1.1257` |
 
 ### Multi-Model Storage Estimator (Graph + FTS + Vector + Relational)
@@ -200,7 +200,7 @@ Estimate total logical storage before applying the `7.5 TiB/node` (75%) node flo
 | **Compute** | `$5,656.77` | `$2,262.71` | `-$3,394.06` (-60.0%) |
 | **Database Storage (12 TiB)** | `$3,870.72` | `$1,806.34` | `-$2,064.38` (-53.3%) |
 | **Total Core Monthly TCO** | **`$9,527.49 / mo`** | **`$4,069.04 / mo`** | **`-$5,458.45 / mo` (-57.3%)** |
-| *Optional: 12 TiB BKK + SG DR Backup* | *`+$808.79/mo` (`+$983.04` initial copy egress)* | *`+$808.79/mo` (lower w/ incremental backups)* | *Regional DR* |
+| *Same-Region Bangkok Backups (12 TiB)* | *`+$387.07/mo` (`$0.0315/GiB-mo`, `$0` egress)* | *`+$387.07/mo` (lower w/ Enterprise incremental backups)* | *Same-region recovery* |
 | *Optional: 1 Additional RO Replica (4 nodes)* | — | *`+$1,257.06/mo` (`+30,000` SSD read QPS)* | *Read isolation* |
 
 ### 3-Store Consolidation TCO Comparison Framework

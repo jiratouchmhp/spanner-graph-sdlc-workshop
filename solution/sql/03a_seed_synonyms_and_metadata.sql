@@ -90,7 +90,7 @@ SET metadata = JSON '''{
   "data_residency": "asia-southeast3",
   "ledger_model": "DOUBLE_ENTRY_WRITE_AHEAD",
   "requires_idempotency_key": true,
-  "dr_backup_region": "asia-southeast1",
+  "ai_companion_region": "asia-southeast1",
   "auth_protocol": "mtls_oidc",
   "compliance_frameworks": ["SOX", "DR_RPO_RTO", "THAILAND_PDPA"]
 }'''

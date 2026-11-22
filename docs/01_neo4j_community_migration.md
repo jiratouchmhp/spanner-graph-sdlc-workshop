@@ -22,7 +22,7 @@ Neo4j Community Edition (CE) is popular for early internal SDLC catalogs, but pr
 | **Scale-Out & Memory** | Single JVM heap & vertical scaling ceiling | Horizontal split-based scale-out (up to 10 TiB/node, Managed Autoscaler) |
 | **Security & RBAC** | No role-based access control (RBAC) in CE | IAM + SQL Fine-Grained Access Control (FGAC) + CMEK + VPC-SC + Audit Logs |
 | **Multi-Model Consolidation** | Graph only — requires separate Vector DB & OpenSearch/ES | Unified Graph (ISO GQL) + Relational + Full-Text Search + ScaNN Vector Search in **one ACID commit** |
-| **Backup & PITR** | Offline dumps only | Online backups, **7-day PITR**, cross-region backup copy DR to Singapore (`asia-southeast1`) |
+| **Backup & PITR** | Offline dumps only | Online same-region Bangkok backups, **7-day PITR**, 3-zone synchronous replication (`$0.00/GiB` intra-region) |
 
 ---
 

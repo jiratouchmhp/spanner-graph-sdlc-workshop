@@ -792,7 +792,7 @@ def verify_lab_6(track: str, mode: str = "full") -> tuple[bool, list[str], list[
 
 
 def verify_lab_7(track: str, mode: str = "full") -> tuple[bool, list[str], list[str]]:
-    """Lab 7: Enterprise Sizing, Verified Bangkok/Singapore Pricing & Worksheet."""
+    """Lab 7: Enterprise Sizing, Bangkok Single-Region Pricing & Worksheet."""
     del mode  # Worksheet & sizing calculator are core to both Track A and Track B
     failures: list[str] = []
     notes: list[str] = []
@@ -807,8 +807,6 @@ def verify_lab_7(track: str, mode: str = "full") -> tuple[bool, list[str], list[
                 "all",
                 "--region",
                 "asia-southeast3",
-                "--dr-backup-region",
-                "asia-southeast1",
                 "--json",
             ],
             "sizing_calculator.py --preset all --json",
@@ -817,6 +815,12 @@ def verify_lab_7(track: str, mode: str = "full") -> tuple[bool, list[str], list[
         if proc is not None:
             try:
                 data = json.loads(proc.stdout)
+                if data.get("primary_region") != "asia-southeast3":
+                    failures.append(f"Expected primary_region='asia-southeast3', got {data.get('primary_region')!r}")
+                if data.get("dr_backup_region") is not None:
+                    failures.append(
+                        f"Expected single-region Bangkok default dr_backup_region=None, got {data.get('dr_backup_region')!r}"
+                    )
                 bkk_rate = data["pricing_regions"]["asia-southeast3"]["compute_per_node_hour_usd"]["enterprise"]
                 if abs(bkk_rate - 1.2915) > 1e-6:
                     failures.append(f"Bangkok Enterprise rate mismatch: {bkk_rate} != 1.2915")
@@ -824,6 +828,12 @@ def verify_lab_7(track: str, mode: str = "full") -> tuple[bool, list[str], list[
                 if set(by_name.keys()) != {"workshop", "small", "medium", "large"}:
                     failures.append(f"Unexpected preset set: {sorted(by_name.keys())}")
                 else:
+                    for pname, sc in by_name.items():
+                        dr_info = sc["spanner_costs"]["dr_backup"]
+                        if dr_info.get("enabled") is not False or dr_info.get("total_dr_monthly_recurring_usd", 0.0) != 0.0:
+                            failures.append(
+                                f"Preset {pname} must default to single-region Bangkok backups ($0.00/mo cross-region egress)"
+                            )
                     if by_name["workshop"]["compute"]["is_production_eligible"] is not False:
                         failures.append("workshop 100-PU preset must report is_production_eligible=False")
                     for prod_preset in ("small", "medium", "large"):
@@ -832,7 +842,7 @@ def verify_lab_7(track: str, mode: str = "full") -> tuple[bool, list[str], list[
                             failures.append(f"Preset {prod_preset} fell below 1,000 PU production floor")
                         if sc["legacy_3_store_tco"]["savings_vs_infra_only"]["spanner_cud_3yr"]["monthly_usd"] <= 0:
                             failures.append(f"Preset {prod_preset} expected positive 3-store TCO savings")
-                notes.append("Verified Bangkok 2026 rate card ($1.2915/node-hr) & all 4 sizing presets")
+                notes.append("Verified Bangkok single-region 2026 rate card ($1.2915/node-hr, $0.00/mo cross-region egress) & all 4 sizing presets")
             except (KeyError, json.JSONDecodeError) as exc:
                 failures.append(f"Invalid JSON from sizing_calculator.py: {exc}")
     elif track == "solution":
@@ -871,7 +881,7 @@ def verify_lab_7(track: str, mode: str = "full") -> tuple[bool, list[str], list[
                 _note_if_clean(before, failures, notes, f"Validated JSON & COMPLETED status in {worksheet_rel}")
     else:
         if worksheet_path.is_file() and calc_path.is_file():
-            if _run_py(
+            ws_proc = _run_py(
                 [
                     sys.executable,
                     "solution/tools/sizing_calculator.py",
@@ -881,8 +891,18 @@ def verify_lab_7(track: str, mode: str = "full") -> tuple[bool, list[str], list[
                 ],
                 f"sizing_calculator.py --worksheet {worksheet_rel}",
                 failures,
-            ):
-                notes.append(f"Verified worksheet schema compatibility ({worksheet_rel})")
+            )
+            if ws_proc is not None:
+                try:
+                    ws_data = json.loads(ws_proc.stdout)
+                    if ws_data.get("primary_region") != "asia-southeast3" or ws_data.get("dr_backup_region") is not None:
+                        failures.append(
+                            f"{worksheet_rel} must default to Bangkok single-region (asia-southeast3, dr_backup_region=none)"
+                        )
+                    else:
+                        notes.append(f"Verified single-region Bangkok worksheet compatibility ({worksheet_rel})")
+                except json.JSONDecodeError as exc:
+                    failures.append(f"Invalid JSON from worksheet evaluation: {exc}")
 
     return not failures, failures, notes
 
@@ -918,10 +938,18 @@ def verify_lab_8(track: str, mode: str = "full") -> tuple[bool, list[str], list[
     if raw_prov is not None:
         if not os.access(prov_path, os.X_OK):
             failures.append("scripts/provision_workshop_env.sh is not executable (chmod +x required)")
-        for token in ("asia-southeast3", "ENTERPRISE", "--default-backup-schedule-type=NONE", "backup-to-singapore"):
+        for token in (
+            "asia-southeast3",
+            "regional-${REGION}",
+            "asia-southeast1",
+            "ENTERPRISE",
+            "--default-backup-schedule-type=NONE",
+            "apply-postload",
+            "cleanup",
+        ):
             if token not in raw_prov:
                 failures.append(f"scripts/provision_workshop_env.sh missing expected default/command '{token}'")
-        notes.append("Verified Bangkok 100-PU Enterprise provisioning & cleanup defaults")
+        notes.append("Verified Bangkok single-region 100-PU Enterprise provisioning & cleanup defaults")
 
     spec = json.loads((REPO_ROOT / "WORKSHOP_SPEC.json").read_text(encoding="utf-8"))
     missing_skills = [

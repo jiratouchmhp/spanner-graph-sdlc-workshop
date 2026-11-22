@@ -2,7 +2,12 @@
 
 **Consolidate Neo4j Community Edition + a Separate Vector Database + a Separate Keyword Search Cluster into One Strongly Consistent Cloud Spanner Enterprise Platform.**
 
-This hands-on enterprise workshop demonstrates **Use Case 4**: replacing a fragile 3-store SDLC architecture with a single ACID **Cloud Spanner Enterprise** database combining **Spanner Graph (ISO GQL)**, **Full-Text Search**, **ScaNN Vector Search**, **Serverless Data Boost Graph Algorithms**, and **secure multi-agent MCP Toolbox for Databases** access — anchored on the fictional **Acme Commerce Platform** and designed for Southeast Asia **Thailand PDPA** residency (`regional-asia-southeast3` Bangkok primary + `asia-southeast1` Singapore AI & DR secondary).
+This hands-on enterprise workshop demonstrates **Use Case 4**: replacing a fragile 3-store SDLC architecture with a single ACID **Cloud Spanner Enterprise** database combining **Spanner Graph (ISO GQL)**, **Full-Text Search**, **ScaNN Vector Search**, **Serverless Data Boost Graph Algorithms**, and **secure multi-agent MCP Toolbox for Databases** access — anchored on the fictional **Acme Commerce Platform** and built on a strict **Bangkok single-region database/app architecture** for **Thailand PDPA** data residency.
+
+> **Strict Regional Architecture (Single-Region Bangkok Core — NO 2-Region Spanner DR):**
+> - **Primary & Only Database/App Region — Bangkok (`asia-southeast3` / `regional-asia-southeast3`):** Single **Cloud Spanner Enterprise** regional instance (3-zone synchronous quorum `asia-southeast3-a/b/c`, `99.99%` SLA, Thailand PDPA data residency, same-region Bangkok backups & 7-day PITR), **Cloud Run MCP Toolbox** services, **Secret Manager** (`user-managed` in `asia-southeast3`), and **GCS staging / Dataflow**.
+> - **Companion Region (Fallback ONLY for GCP Services Unavailable in Bangkok) — Singapore (`asia-southeast1`, `~25 ms` RTT):** Used **strictly** for **Vertex AI** (`gemini-embedding-001` & `gemini-2.5-flash`), **Model Armor** (`modelarmor.asia-southeast1.rep.googleapis.com`), and **Cloud DLP / Sensitive Data Protection**.
+> - **No 2-Region Spanner DR:** There is **no** second Spanner instance in Singapore, **no** cross-region Spanner backup copy workflow, and **`$0` cross-region DR backup egress** in this workshop.
 
 ---
 
@@ -36,7 +41,7 @@ make TRACK=solution verify-lab LAB=all              # Compare against verified r
 # 5. Run stdlib pipeline dry-runs, Hero offline fixture replay, Lab 6 mock RBAC & Bangkok TCO
 make dry-run-pipelines
 make demo-mcp-mock
-make sizing PRESET=all REGION=asia-southeast3 DR_BACKUP_REGION=asia-southeast1
+make sizing PRESET=all REGION=asia-southeast3
 
 # 6. List all 16 Makefile targets and configurable overrides (TRACK, LAB, MODE, PRESET, REGION, WORKSHEET)
 make help
@@ -64,9 +69,9 @@ Engineering teams at **Acme Commerce Platform** maintain `12` microservices, `24
 
 ---
 
-## BEFORE vs. AFTER Architecture (Bangkok Primary + Singapore AI & DR Secondary)
+## BEFORE vs. AFTER Architecture (Bangkok Single-Region Core + Singapore Companion AI & Security)
 
-Cloud Spanner does not currently offer a pre-built dual-region or multi-region configuration pairing Bangkok (`asia-southeast3`) and Singapore (`asia-southeast1`). The reference Southeast Asia enterprise topology keeps primary operational SDLC state inside Thailand (`regional-asia-southeast3`, 3-zone synchronous quorum, `99.99%` SLA, Thailand PDPA data residency) while pairing with Singapore (`asia-southeast1`, `~25 ms` RTT) for Vertex AI embeddings/LLM inference, Model Armor regional templates, and cross-region Spanner backup disaster recovery:
+All database, application, secret, and storage resources run strictly in **Bangkok (`asia-southeast3` / `regional-asia-southeast3`)** — a single **Cloud Spanner Enterprise** regional instance with 3-zone synchronous quorum (`asia-southeast3-a/b/c`), `99.99%` SLA, Thailand PDPA data residency, and same-region Bangkok backups/PITR (**no** 2-region Spanner DR instance). **Singapore (`asia-southeast1`, `~25 ms` RTT)** serves strictly as a companion region **only** for GCP services unavailable in Bangkok: **Vertex AI** (`gemini-embedding-001` & `gemini-2.5-flash`), **Model Armor**, and **Cloud DLP**:
 
 ```mermaid
 flowchart LR
@@ -82,31 +87,31 @@ flowchart LR
         B_CDC -. "Lag / Drift" .-> B_VEC & B_ES
     end
 
-    subgraph AFTER["AFTER: Unified Cloud Spanner Enterprise (Bangkok Primary + Singapore AI & DR)"]
+    subgraph AFTER["AFTER: Unified Cloud Spanner Enterprise (Bangkok Single-Region Core + Singapore Companion AI & Security)"]
         direction TB
         subgraph AGENTS["Antigravity IDE & Dual-Layer Agent Access"]
             A_IDE["Antigravity IDE\n(.agents/skills/* + MCP Store)"]
-            A_CR["3 Isolated Cloud Run MCP Toolbox Services\n(Bangkok asia-southeast3 | OIDC @caller_email\nLayer 1 DB IAM + Sliced Persona YAMLs)"]
+            A_CR["3 Isolated Cloud Run MCP Toolbox Services\n(Bangkok asia-southeast3 | user-managed Secrets\nOIDC @caller_email | Layer 1 DB IAM + Sliced YAMLs)"]
             A_FGAC["FGAC-Capable Direct Clients\n(Spanner Remote MCP, SDK, ADK, gcloud)\nLayer 2 sa-fgac-* Conditional databaseRoleUser"]
             A_IDE --> A_CR
         end
 
-        subgraph BKK["Primary Region: Bangkok (asia-southeast3) — Thailand PDPA Resident"]
-            A_SP["Cloud Spanner Enterprise (regional-asia-southeast3)\n3-Zone Sync Quorum | 99.99% SLA | Single TrueTime ACID Commit\n• Path A: SdlcGraph (68 nodes, 174 explicit rows, 60 dual-projected)\n• Path B: DocumentChunks (TOKENLIST FTS + ARRAY<FLOAT32>(768) ScaNN)\n• Locality Group: sdlc_cold_archive (SSD -> HDD 30d, 5x savings)\n• Data Boost Algorithms (PageRank, WCC, ShortestPath) + FGAC Views"]
+        subgraph BKK["Primary & Only Database/App Region: Bangkok (asia-southeast3) — Thailand PDPA Resident"]
+            A_SP["Cloud Spanner Enterprise (regional-asia-southeast3 — Single Instance)\n3-Zone Sync Quorum (a/b/c) | 99.99% SLA | Same-Region Backups & 7-Day PITR\n• Path A: SdlcGraph (68 nodes, 174 explicit rows, 60 dual-projected)\n• Path B: DocumentChunks (TOKENLIST FTS + ARRAY<FLOAT32>(768) ScaNN)\n• Locality Group: sdlc_cold_archive (SSD -> HDD 30d, 5x savings)\n• Data Boost Algorithms (PageRank, WCC, ShortestPath) + FGAC Views\n• GCS Staging & Dataflow Bulk Load (asia-southeast3)"]
         end
 
-        subgraph SG["Secondary / AI & DR Region: Singapore (asia-southeast1) — ~25 ms RTT"]
+        subgraph SG["Companion Region ONLY for Services Unavailable in Bangkok: Singapore (asia-southeast1) — ~25 ms RTT"]
             A_VAI["Vertex AI Regional Endpoint (ADC / Workload Identity)\n• gemini-embedding-001 (768-dim FLOAT32 — regional only)\n• gemini-2.5-flash (LLM synthesis; global fallback for LLM only)"]
-            A_MA["Model Armor Regional Templates\nmodelarmor.asia-southeast1.rep.googleapis.com\n(RAI, SDP, Prompt Injection — PDPA notice)"]
-            A_DR["Cross-Region Spanner Backup Copy DR\nregional-asia-southeast1\n($0.08/GiB egress + $0.03432/GiB-mo)"]
+            A_MA["Model Armor Regional Templates\nmodelarmor.asia-southeast1.rep.googleapis.com\n(RAI, Prompt Injection & Jailbreak — PDPA notice)"]
+            A_DLP["Cloud DLP / Sensitive Data Protection\nasia-southeast1\n(Companion PII/PCI inspection template for Model Armor)"]
         end
 
         A_CR -- "Curated readOnly / scoped spanner-sql" --> A_SP
         A_FGAC -- "Explicit database_role (SQL RBAC)" --> A_SP
         A_CR -- "Vertex AI Embeddings (~25ms RTT)" --> A_VAI
-        A_CR -. "Ingress/Egress Guardrails" .-> A_MA
+        A_CR -. "Prompt / Response Guardrails" .-> A_MA
+        A_MA -. "SDP Inspection Template" .-> A_DLP
         A_SP -- "CREATE MODEL / ML.PREDICT" --> A_VAI
-        A_SP -- "gcloud spanner backups copy" --> A_DR
     end
 
     BEFORE ==> |"Consolidate into 1 ACID Engine"| AFTER
@@ -129,8 +134,8 @@ Both tracks cover all **7 customer requirements** and finish with the Hero Blast
 | **4** | 4 | [04_search_strategy_options.md](docs/04_search_strategy_options.md) | 25 min | 60 min | `05_search_strategies_benchmark.sql` (FTS/Fuzzy/JSON/KNN/ScaNN) + `08_graph_algorithms_criticality.sql` |
 | **5** | 5 | [05_hybrid_retrieval_and_graphrag.md](docs/05_hybrid_retrieval_and_graphrag.md) | 45 min | 75 min | `06_hybrid_rrf_rsf_filtered.sql` (RRF without `ROW_NUMBER()`) + `07_hero_api_blast_radius_graphrag.sql` |
 | **6** | 6 | [06_mcp_toolbox_agent_security.md](docs/06_mcp_toolbox_agent_security.md) | 40 min | 75 min | `04_fgac_roles_views.sql`, `starter/mcp/tools.yaml`, `adk_multi_agent_demo.py`, prompt-injection demo |
-| **7** | 7 | [07_sizing_and_cost_tco.md](docs/07_sizing_and_cost_tco.md) | 20 min | 45 min | Verified Bangkok/Singapore pricing, CUDs, HDD tiering, DR egress + `customer_scale_worksheet.json` |
-| **8** | 7 | [08_observability_and_troubleshooting.md](docs/08_observability_and_troubleshooting.md) | 15 min | 30 min | `11_observability_and_studio_viz.sql` (`SAFE_TO_JSON(p)`, `SPANNER_SYS` Insights), DR copy & teardown |
+| **7** | 7 | [07_sizing_and_cost_tco.md](docs/07_sizing_and_cost_tco.md) | 20 min | 45 min | Verified Bangkok single-region Enterprise pricing, CUDs, HDD tiering, 3-store TCO (`$0` cross-region DR) + `customer_scale_worksheet.json` |
+| **8** | 7 | [08_observability_and_troubleshooting.md](docs/08_observability_and_troubleshooting.md) | 15 min | 30 min | `11_observability_and_studio_viz.sql` (`SAFE_TO_JSON(p)`, `SPANNER_SYS` Insights), same-region PITR/backups, `verify-live` & teardown |
 
 ---
 
@@ -151,7 +156,6 @@ make install-mcp      # Optional Lab 6 live ADK/MCP & Model Armor packages
 
 # 1. Provision Bangkok 100-PU Enterprise sandbox (--default-backup-schedule-type=NONE) + base DDL (~2 min)
 make provision-gcp
-# Quota fallback to Singapore if needed: make provision-gcp REGION=asia-southeast1
 
 # 2. Load Path A structured graph (<5s) and Path B 45 Markdown docs + 152 SG embeddings (~22s)
 python3 solution/pipelines/neo4j_to_spanner_loader.py
@@ -160,31 +164,30 @@ python3 solution/pipelines/unstructured_graphrag_ingest.py
 # 3. Apply 4-stage post-load (20 indexes + 5 FTS + ScaNN + ANALYZE; ~10 min on 100 PU — run before break!)
 bash scripts/provision_workshop_env.sh apply-postload
 
-# 4. Run live Hero Queries (33-520 ms), SQL scripts & 5-check live verification suite
+# 4. Run live Hero Queries (33-520 ms), SQL scripts & live Bangkok verification suite
 python3 labs/run_hero_query.py --query B --api-id api-payments-charge-v2 \
   --check-fixture solution/sql/fixtures/07_hero_expected_rows.json
 make verify-live
 
-# 5. Optional Singapore DR backup copy (~35-40 min on 100 PU; run async or facilitator demo), then clean teardown (zero lingering charges)
-bash scripts/provision_workshop_env.sh backup-to-singapore
-make cleanup-gcp          # Spanner instances & backups only
-make cleanup-all-gcp      # Full teardown (Cloud Run MCP, Secrets, SAs, DLP/Model Armor, GCS, Spanner) + verify_zero_residual.sh audit
+# 5. Clean guaranteed zero-residual teardown (~2 min; zero lingering charges)
+make cleanup-gcp          # Bangkok Spanner instance & same-region backups only
+make cleanup-all-gcp      # Full teardown (Bangkok Cloud Run MCP, Secrets, SAs, GCS, Spanner + SG DLP/Model Armor) + verify_zero_residual.sh audit
 ```
 
-### Live-Verified Bangkok (`asia-southeast3`) + Singapore (`asia-southeast1`) Execution Timings
+### Live-Verified Bangkok (`asia-southeast3`) + Singapore Companion AI/Security (`asia-southeast1`) Timings
 
-Validated end-to-end on a live GCP project (`100` PU Cloud Spanner Enterprise in Bangkok + Vertex AI / DLP / Model Armor / DR backup in Singapore):
+Validated end-to-end on a live GCP project (`100` PU single-region Cloud Spanner Enterprise, Cloud Run MCP, Secret Manager & GCS in Bangkok; Vertex AI, Model Armor & Cloud DLP in Singapore):
 
 | Workshop Stage | Live Component / Command | Verified Duration | Notes |
 | :--- | :--- | :---: | :--- |
-| **Base DDL Create** | `provision_workshop_env.sh create` (`01`/`02`/`04`) | **~2 min** | Instance, DB, tables, views, FGAC roles, `SdlcGraph` |
+| **Base DDL Create** | `provision_workshop_env.sh create` (`01`/`02`/`04`) | **~2 min** | Single Bangkok instance, DB, tables, views, FGAC roles, `SdlcGraph` |
 | **Path A Load** | `neo4j_to_spanner_loader.py` (68 nodes, 174 explicit edges) | **< 5 s** | Includes `SdlcDynamicGraph` (`domain_key = node_id`) |
-| **Path B + Embeddings** | `unstructured_graphrag_ingest.py` (45 docs, 152 × 768-dim) | **~22 s** | Live Singapore Vertex AI `gemini-embedding-001` |
+| **Path B + Embeddings** | `unstructured_graphrag_ingest.py` (45 docs, 152 × 768-dim) | **~22 s** | Live Singapore Vertex AI `gemini-embedding-001` (`~25 ms` RTT) |
 | **4-Stage `apply-postload`** | 20 indexes + 5 FTS + ScaNN + `ANALYZE` (`100` PU) | **~10 min** | **Facilitator tip:** start right before morning break (or temporarily use `300` PU in live demos) |
 | **Hero & SQL/GQL Queries** | Hero A/B/C (7-row fixture) + Labs `04b`/`05`/`06`/`09`/`10`/`11` | **33–520 ms** | ScaNN `VectorIndexScan` + FGAC `sdlc_readonly_role` ALLOW/DENY |
 | **Lab 4 Data Boost Algos** | `PageRank`, `WeaklyConnectedComponents`, `ShortestPath` | **~3 min** | All 3 serverless Data Boost runs combined |
-| **Lab 6 Full Deployment** | 3 BKK Cloud Run MCP (`v1.13.1`) + 3 Secrets + 7 SAs + SG DLP/Model Armor | **~3–4 min** | Verified live OIDC-authenticated `/mcp` Hero GraphRAG call |
-| **Lab 8 Backup DR Copy** | Bangkok → Singapore (`regional-asia-southeast1`) backup copy | **~35–40 min** (`100` PU: ~22m backup + ~18m copy) | Run async/facilitator demo; guaranteed zero-residual teardown via `verify_zero_residual.sh` |
+| **Lab 6 Full Deployment** | 3 BKK Cloud Run MCP (`v1.13.1`) + 3 BKK Secrets + 7 SAs + SG DLP/Model Armor | **~3–4 min** | Verified live OIDC-authenticated `/mcp` Hero GraphRAG call |
+| **Lab 8 Full Teardown** | `make cleanup-all-gcp` (`verify_zero_residual.sh` 6-category audit) | **~2 min** | Removes all Bangkok + Singapore companion workshop resources cleanly |
 
 ---
 
@@ -194,7 +197,7 @@ This repository bundles **8 modular Antigravity IDE skills** alongside the alway
 
 | # | Skill Name | Scope | Primary Labs | Purpose & Activation Scope |
 | :-: | :--- | :---: | :---: | :--- |
-| **1** | [`spanner-enterprise-platform-ops`](.agents/skills/spanner-enterprise-platform-ops/SKILL.md) | Production | 2, 7, 8 | Editions, CUDs, Bangkok/Singapore DR topology, dialects, KV, Queues, CLI/SDKs/Emulator, Managed Autoscaler, PITR, backups, drop protection. |
+| **1** | [`spanner-enterprise-platform-ops`](.agents/skills/spanner-enterprise-platform-ops/SKILL.md) | Production | 2, 7, 8 | Editions, CUDs, Bangkok single-region 3-zone topology (`99.99%` SLA), dialects, KV, Queues, CLI/SDKs/Emulator, Managed Autoscaler, same-region PITR, backups, drop protection. |
 | **2** | [`spanner-schema-and-data-modeling`](.agents/skills/spanner-schema-and-data-modeling/SKILL.md) | Production | 3 | Split-safe PKs, `INTERLEAVE IN PARENT` vs `INTERLEAVE IN`, covering/expression indexes, FKs (`INV-06` dual-cascade ban), views/`SECURE_CONTEXT()`, Locality Groups, TTL, Change Streams DDL. |
 | **3** | [`spanner-graph-modeling-and-gql`](.agents/skills/spanner-graph-modeling-and-gql/SKILL.md) | Production | 3, 4, 5, 8 | `CREATE PROPERTY GRAPH`, structural invariants, dual-projected edges, view-backed & `DYNAMIC LABEL` graphs, ISO GQL (`TRAIL`, `IS_FIRST`, `factorized_mode`), Data Boost Graph Algorithms (`PageRank`, `WCC`, `ShortestPath`), `SAFE_TO_JSON` Studio viz. |
 | **4** | [`spanner-search-ai-and-graphrag`](.agents/skills/spanner-search-ai-and-graphrag/SKILL.md) | Production | 4, 5 | Vertex AI `CREATE MODEL` + `ML.PREDICT` embeddings (`asia-southeast1`), throttled PDML backfills, FTS (`SEARCH`, Custom Dictionaries, fuzzy n-grams), Exact KNN, ScaNN `CREATE VECTOR INDEX`, RRF/RSF/Filtered Hybrid Search, GraphRAG. |
@@ -216,7 +219,7 @@ spanner-graph-sdlc-workshop/
 ├── WORKSHOP_CONTENT_PLAN.md               # Deep curriculum design, pricing & 7-requirement outcomes matrix
 ├── GEMINI.md                              # Agent workspace orientation & locked invariants (INV-01..09)
 ├── Makefile                               # 16 offline/live targets (Zero-Docker first, stdlib unittest)
-├── .env.example                           # Bangkok primary + Singapore Vertex AI/DR env template
+├── .env.example                           # Bangkok primary + Singapore companion AI/Security env template
 ├── .agents/
 │   ├── rules/spanner-graph-workshop.md    # Always-on safety, residency, SQL & MCP guardrails
 │   └── skills/                            # 8 modular Antigravity skills (7 production + 1 guide)
@@ -233,11 +236,11 @@ spanner-graph-sdlc-workshop/
 │   └── run_hero_query.py                  # Parameterized read-only Hero Query runner (A/B/C/all, --dry-run)
 ├── scripts/
 │   ├── preflight_check.sh                 # Fast 5-second attendee readiness & Zero-Docker check
-│   ├── provision_workshop_env.sh          # create | apply-postload | backup-to-singapore | cleanup [--all]
+│   ├── provision_workshop_env.sh          # create | apply-postload | cleanup [--all]
 │   ├── run_live_sql.py                    # Multi-statement live/dry-run GoogleSQL & ISO GQL runner
 │   ├── setup_antigravity_skills.sh        # Audits all 8 skills, rule file & MCP config (--link-legacy)
 │   ├── verify_lab.py                      # Instant offline green/red grader (MODE=full|express)
-│   ├── verify_live_gcp.sh                 # Live DDL, ScaNN PLAN, Hero Query, FGAC & DR verification
+│   ├── verify_live_gcp.sh                 # Live Bangkok DDL, ScaNN PLAN, Hero Query & FGAC verification
 │   └── verify_zero_residual.sh            # Post-teardown 6-category zero-residual GCP audit
 ├── starter/                               # PARTICIPANT WORKSPACE: 15 TODO(Lab 1–8) exercise stubs
 │   ├── README.md                          # Step-by-step participant starter guide (Zero-Docker + Express/Full)

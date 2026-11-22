@@ -3,9 +3,11 @@
 # Cloud Spanner Enterprise SDLC Knowledge Graph Workshop — Environment Lifecycle
 # =============================================================================
 # Manages the workshop Cloud Spanner Enterprise sandbox in Bangkok primary
-# (`regional-asia-southeast3`, Thailand PDPA resident, 100 PU, ~$1.15/8-hr lab)
-# with optional Singapore (`asia-southeast1`) Vertex AI, DR backup copy, and
-# quota fallback support.
+# (`regional-asia-southeast3`, single-region 3-zone synchronous quorum,
+# 99.99% SLA, Thailand PDPA resident, 100 PU, ~$1.15/8-hr lab, same-region
+# backups/PITR only — no second Spanner DR instance), with Singapore
+# (`asia-southeast1`, ~25 ms RTT) used ONLY for AI/Security companion services
+# unavailable in Bangkok (Vertex AI, Model Armor, Cloud DLP).
 #
 # Subcommands:
 #   create               Provision 100-PU Enterprise instance (--default-backup-schedule-type=NONE),
@@ -13,17 +15,14 @@
 #                        from `--track starter|solution` (default: solution).
 #   apply-postload       Run 4-stage post-load orchestrator (03a -> 03b asia-southeast1 -> 03 -> ANALYZE)
 #                        using `--track starter|solution` for 03_indexes_fts_vector_postload.sql.
-#   backup-to-singapore  Create a Bangkok backup and copy it cross-region to Singapore (regional-asia-southeast1).
-#   cleanup              Delete backups (primary + optional Singapore DR) and remove sandbox instance(s).
+#   cleanup              Delete same-region backups and remove the Bangkok sandbox instance cleanly.
 #                        Pass `--all` for full teardown (Module 6 Cloud Run/Secrets/IAM/SAs/DLP/Model Armor
-#                        + GCS staging bucket + Spanner backups/instances + verify_zero_residual.sh).
+#                        + GCS staging bucket + Bangkok Spanner backups/instance + verify_zero_residual.sh).
 #
 # Usage:
 #   bash scripts/provision_workshop_env.sh create --dry-run
 #   bash scripts/provision_workshop_env.sh create --track starter --dry-run
-#   bash scripts/provision_workshop_env.sh create --region asia-southeast1 --dry-run
 #   bash scripts/provision_workshop_env.sh apply-postload --track starter --dry-run
-#   bash scripts/provision_workshop_env.sh backup-to-singapore --dry-run
 #   bash scripts/provision_workshop_env.sh cleanup --dry-run
 #   bash scripts/provision_workshop_env.sh cleanup --all --dry-run
 # =============================================================================
@@ -88,17 +87,15 @@ if [[ -z "${PYTHON_BIN}" ]]; then
   fi
 fi
 
-# Locked defaults aligned with WORKSHOP_SPEC.json
+# Locked defaults aligned with strict Bangkok single-region architecture
 PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-${SPANNER_PROJECT:-}}"
 REGION="${GOOGLE_CLOUD_REGION:-${SPANNER_REGION:-asia-southeast3}}"
-SECONDARY_REGION="${GOOGLE_CLOUD_SECONDARY_REGION:-asia-southeast1}"
 VERTEX_AI_LOCATION="${VERTEX_AI_LOCATION:-${VERTEX_AI_EMBEDDING_LOCATION:-asia-southeast1}}"
+MODEL_ARMOR_LOCATION="${MODEL_ARMOR_LOCATION:-asia-southeast1}"
 SPANNER_INSTANCE="${SPANNER_INSTANCE:-sdlc-kg-enterprise}"
-SPANNER_SECONDARY_INSTANCE="${SPANNER_SECONDARY_INSTANCE:-sdlc-kg-dr-singapore}"
 SPANNER_DATABASE="${SPANNER_DATABASE:-sdlc_knowledge_graph}"
 SPANNER_EDITION="${SPANNER_EDITION:-ENTERPRISE}"
 SPANNER_PROCESSING_UNITS="${SPANNER_PROCESSING_UNITS:-100}"
-BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
 SERVICE_PREFIX="${SERVICE_PREFIX:-sdlc-mcp}"
 SECRET_PREFIX="${SECRET_PREFIX:-sdlc-tools}"
 GCS_BUCKET="${GCS_BUCKET:-}"
@@ -114,32 +111,30 @@ usage() {
 Usage: bash scripts/provision_workshop_env.sh <command> [OPTIONS]
 
 Commands:
-  create               Provision Cloud Spanner Enterprise sandbox + GoogleSQL DB + base DDL
+  create               Provision Bangkok Cloud Spanner Enterprise sandbox + GoogleSQL DB + base DDL
   apply-postload       Execute 4-stage post-load (03a synonyms -> 03b Vertex AI -> 03 indexes -> ANALYZE)
-  backup-to-singapore  Create Bangkok backup & copy cross-region to Singapore (regional-asia-southeast1)
-  cleanup              Delete backups and delete workshop Spanner instance(s) cleanly
+  cleanup              Delete same-region backups and delete the workshop Spanner instance cleanly
 
 Options:
-  --track <starter|solution> SQL track to deploy for 01/04/03 DDL (default: solution)
-  --project <id>             GCP Project ID (default: $GOOGLE_CLOUD_PROJECT)
-  --region <region>          Primary region: asia-southeast3 (default Bangkok) or asia-southeast1 (fallback)
-  --secondary-region <reg>   DR backup copy region (default: asia-southeast1 Singapore)
-  --vertex-location <loc>    Regional Vertex AI location (default: asia-southeast1; NEVER global)
-  --instance <id>            Primary Spanner instance ID (default: sdlc-kg-enterprise)
-  --dr-instance <id>         Secondary Singapore DR instance ID (default: sdlc-kg-dr-singapore)
-  --database <id>            Spanner database ID (default: sdlc_knowledge_graph)
-  --processing-units <pu>    Processing units (default: 100 sandbox; production requires >= 1000)
-  --service-prefix <prefix>  Cloud Run MCP service prefix for cleanup --all (default: sdlc-mcp)
-  --secret-prefix <prefix>   Secret Manager prefix for cleanup --all (default: sdlc-tools)
-  --bucket <name>            GCS staging bucket name for cleanup --all (default: <project>-sdlc-kg-<region>)
-  --with-dynamic-graph       Also apply 02_path_b_schemaless_comparison.sql during create
-  --skip-fgac                Skip applying 04_fgac_roles_views.sql during create
-  --all                      (cleanup only) Full teardown: Module 6 IAM/Cloud Run/Secrets/SAs/DLP/
-                             Model Armor + GCS staging bucket + Spanner backups/instances +
-                             scripts/verify_zero_residual.sh audit
-  --dry-run                  Print all commands without mutating GCP resources
-  --yes                      Skip interactive confirmation prompt for cleanup
-  -h, --help                 Show this help message
+  --track <starter|solution>    SQL track to deploy for 01/04/03 DDL (default: solution)
+  --project <id>                GCP Project ID (default: $GOOGLE_CLOUD_PROJECT)
+  --region <region>             Primary region for Spanner, Cloud Run, Secrets & GCS (default: asia-southeast3 Bangkok)
+  --vertex-location <loc>       Regional Vertex AI location (default: asia-southeast1 Singapore; NEVER global)
+  --model-armor-location <loc>  Regional Model Armor & Cloud DLP location (default: asia-southeast1 Singapore)
+  --instance <id>               Bangkok Spanner instance ID (default: sdlc-kg-enterprise)
+  --database <id>               Spanner database ID (default: sdlc_knowledge_graph)
+  --processing-units <pu>       Processing units (default: 100 sandbox; production requires >= 1000)
+  --service-prefix <prefix>     Cloud Run MCP service prefix for cleanup --all (default: sdlc-mcp)
+  --secret-prefix <prefix>      Secret Manager prefix for cleanup --all (default: sdlc-tools)
+  --bucket <name>               GCS staging bucket name for cleanup --all (default: <project>-sdlc-kg-<region>)
+  --with-dynamic-graph          Also apply 02_path_b_schemaless_comparison.sql during create
+  --skip-fgac                   Skip applying 04_fgac_roles_views.sql during create
+  --all                         (cleanup only) Full teardown: Module 6 IAM/Cloud Run/Secrets/SAs/DLP/
+                                Model Armor + GCS staging bucket + Bangkok Spanner backups/instance +
+                                scripts/verify_zero_residual.sh audit
+  --dry-run                     Print all commands without mutating GCP resources
+  --yes                         Skip interactive confirmation prompt for cleanup
+  -h, --help                    Show this help message
 EOF
 }
 
@@ -159,7 +154,7 @@ COMMAND="$1"
 shift
 
 case "${COMMAND}" in
-  create|apply-postload|backup-to-singapore|cleanup) ;;
+  create|apply-postload|cleanup) ;;
   -h|--help)
     usage
     exit 0
@@ -188,24 +183,19 @@ while [[ $# -gt 0 ]]; do
       REGION="$2"
       shift 2
       ;;
-    --secondary-region)
-      require_arg "$1" "$#"
-      SECONDARY_REGION="$2"
-      shift 2
-      ;;
     --vertex-location)
       require_arg "$1" "$#"
       VERTEX_AI_LOCATION="$2"
       shift 2
       ;;
+    --model-armor-location)
+      require_arg "$1" "$#"
+      MODEL_ARMOR_LOCATION="$2"
+      shift 2
+      ;;
     --instance)
       require_arg "$1" "$#"
       SPANNER_INSTANCE="$2"
-      shift 2
-      ;;
-    --dr-instance)
-      require_arg "$1" "$#"
-      SPANNER_SECONDARY_INSTANCE="$2"
       shift 2
       ;;
     --database)
@@ -303,7 +293,6 @@ GCS_BUCKET="${GCS_BUCKET#gs://}"
 GCS_BUCKET="${GCS_BUCKET%%/*}"
 
 INSTANCE_CONFIG="regional-${REGION}"
-DR_INSTANCE_CONFIG="regional-${SECONDARY_REGION}"
 SQL_TRACK_DIR="${REPO_ROOT}/${TRACK}/sql"
 
 run_cmd() {
@@ -351,8 +340,8 @@ print_banner() {
   echo "  Mode              : $([[ "${DRY_RUN}" == "true" ]] && echo "DRY-RUN" || echo "LIVE GCP")"
   echo "  Track             : ${TRACK} (${TRACK}/sql)"
   echo "  Project           : ${PROJECT_ID}"
-  echo "  Primary Region    : ${REGION} (${INSTANCE_CONFIG})"
-  echo "  Secondary / AI/DR : ${SECONDARY_REGION} (${DR_INSTANCE_CONFIG} | Vertex AI: ${VERTEX_AI_LOCATION})"
+  echo "  Primary Region    : ${REGION} (${INSTANCE_CONFIG} — Spanner, Cloud Run, Secrets, GCS, backups)"
+  echo "  Companion AI/Sec  : Vertex AI=${VERTEX_AI_LOCATION} | Model Armor & DLP=${MODEL_ARMOR_LOCATION} (Singapore — unavailable in Bangkok)"
   echo "  Instance / DB     : ${SPANNER_INSTANCE} / ${SPANNER_DATABASE}"
   echo "  Edition / PUs     : ${SPANNER_EDITION} / ${SPANNER_PROCESSING_UNITS} PU"
   if [[ "${COMMAND}" == "cleanup" && "${CLEANUP_ALL}" == "true" ]]; then
@@ -553,54 +542,6 @@ cmd_apply_postload() {
   fi
 }
 
-cmd_backup_to_singapore() {
-  print_banner
-  local ts
-  ts="$(date -u +%Y%m%d-%H%M%S)"
-  local src_backup="bkk-sdlc-bkp-${ts}"
-  local dr_backup="sg-dr-sdlc-bkp-${ts}"
-  local exp_date
-  exp_date="$("${PYTHON_BIN}" -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=${BACKUP_RETENTION_DAYS})).strftime('%Y-%m-%dT%H:%M:%SZ'))")"
-
-  echo "[INFO] Southeast Asia DR Pattern: Cloud Spanner has no pre-built Bangkok+Singapore dual-region."
-  echo "       Copying Bangkok backup to ${DR_INSTANCE_CONFIG} costs \$0.08/GiB Asia egress + \$0.03432/GiB-mo DR storage."
-  echo "       REMINDER: Backups preserve SQL FGAC roles/grants, but NOT IAM bindings — re-apply IAM after restore."
-  echo ""
-
-  echo "[1/3] Creating source backup '${src_backup}' in ${INSTANCE_CONFIG} (${SPANNER_INSTANCE})..."
-  run_cmd gcloud spanner backups create "${src_backup}" \
-    --project="${PROJECT_ID}" \
-    --instance="${SPANNER_INSTANCE}" \
-    --database="${SPANNER_DATABASE}" \
-    --expiration-date="${exp_date}"
-
-  echo "[2/3] Ensuring destination Singapore DR instance '${SPANNER_SECONDARY_INSTANCE}' (${DR_INSTANCE_CONFIG})..."
-  local dr_instance_desc
-  dr_instance_desc="$(format_spanner_description "SDLC KG DR (${SECONDARY_REGION})" "SDLC KG DR Target")"
-  if [[ "${DRY_RUN}" == "true" ]] || ! gcloud spanner instances describe "${SPANNER_SECONDARY_INSTANCE}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
-    run_cmd gcloud spanner instances create "${SPANNER_SECONDARY_INSTANCE}" \
-      --project="${PROJECT_ID}" \
-      --config="${DR_INSTANCE_CONFIG}" \
-      --description="${dr_instance_desc}" \
-      --edition="${SPANNER_EDITION}" \
-      --processing-units=100 \
-      --default-backup-schedule-type=NONE
-  else
-    echo "[OK] DR destination instance '${SPANNER_SECONDARY_INSTANCE}' already exists."
-  fi
-
-  echo "[3/3] Copying backup cross-region: ${SPANNER_INSTANCE}/${src_backup} -> ${SPANNER_SECONDARY_INSTANCE}/${dr_backup}..."
-  run_cmd gcloud spanner backups copy \
-    --project="${PROJECT_ID}" \
-    --source-instance="${SPANNER_INSTANCE}" \
-    --source-backup="${src_backup}" \
-    --destination-instance="${SPANNER_SECONDARY_INSTANCE}" \
-    --destination-backup="${dr_backup}" \
-    --expiration-date="${exp_date}"
-
-  echo "[OK] Cross-region DR backup copy complete (${dr_backup} in ${DR_INSTANCE_CONFIG})."
-}
-
 delete_instance_backups_and_instance() {
   local inst="$1"
   if [[ "${DRY_RUN}" == "true" ]]; then
@@ -672,12 +613,12 @@ cmd_cleanup() {
       echo "WARNING: FULL TEARDOWN (--all) permanently deletes in project '${PROJECT_ID}':"
       echo "         - 3 Cloud Run MCP services (${SERVICE_PREFIX}-* in ${REGION}) & 3 secrets (${SECRET_PREFIX}-*)"
       echo "         - Project IAM bindings & all 7 workshop Service Accounts"
-      echo "         - Singapore Cloud DLP & Model Armor templates (${SECONDARY_REGION})"
+      echo "         - Companion Singapore Cloud DLP & Model Armor templates (${MODEL_ARMOR_LOCATION})"
       echo "         - Workshop GCS staging bucket (gs://${GCS_BUCKET})"
-      echo "         - Spanner instances '${SPANNER_INSTANCE}', '${SPANNER_SECONDARY_INSTANCE}' & all backups"
+      echo "         - Bangkok Spanner instance '${SPANNER_INSTANCE}' (${INSTANCE_CONFIG}) & all same-region backups"
     else
-      echo "WARNING: This permanently deletes '${SPANNER_INSTANCE}' (and '${SPANNER_SECONDARY_INSTANCE}' if present)"
-      echo "         plus all backups in project '${PROJECT_ID}'."
+      echo "WARNING: This permanently deletes '${SPANNER_INSTANCE}' (${INSTANCE_CONFIG})"
+      echo "         plus all same-region backups in project '${PROJECT_ID}'."
     fi
     read -r -p "Type 'DELETE' to confirm teardown: " confirm
     if [[ "${confirm}" != "DELETE" ]]; then
@@ -704,8 +645,8 @@ cmd_cleanup() {
     if [[ "${DRY_RUN}" == "true" ]]; then
       iam_cleanup_args+=(--dry-run)
     fi
-    if ! MODEL_ARMOR_LOCATION="${MODEL_ARMOR_LOCATION:-${SECONDARY_REGION}}" "${iam_cleanup_args[@]}"; then
-      echo "[WARN] Module 6 cleanup returned non-zero; continuing to delete GCS & Spanner instances so no billed resources remain." >&2
+    if ! MODEL_ARMOR_LOCATION="${MODEL_ARMOR_LOCATION}" "${iam_cleanup_args[@]}"; then
+      echo "[WARN] Module 6 cleanup returned non-zero; continuing to delete GCS & Spanner instance so no billed resources remain." >&2
       cleanup_rc=1
     fi
 
@@ -716,10 +657,7 @@ cmd_cleanup() {
     fi
 
     echo ""
-    echo "[CLEANUP-ALL 3/4] Cleaning up Singapore DR & Bangkok primary Spanner backups and instances..."
-    if ! delete_instance_backups_and_instance "${SPANNER_SECONDARY_INSTANCE}"; then
-      cleanup_rc=1
-    fi
+    echo "[CLEANUP-ALL 3/4] Cleaning up Bangkok primary Spanner backups and instance ('${SPANNER_INSTANCE}')..."
     if ! delete_instance_backups_and_instance "${SPANNER_INSTANCE}"; then
       cleanup_rc=1
     fi
@@ -730,11 +668,10 @@ cmd_cleanup() {
       bash "${REPO_ROOT}/scripts/verify_zero_residual.sh"
       --project "${PROJECT_ID}"
       --instance "${SPANNER_INSTANCE}"
-      --dr-instance "${SPANNER_SECONDARY_INSTANCE}"
       --service-prefix "${SERVICE_PREFIX}"
       --secret-prefix "${SECRET_PREFIX}"
       --region "${REGION}"
-      --secondary-region "${SECONDARY_REGION}"
+      --model-armor-location "${MODEL_ARMOR_LOCATION}"
       --bucket "${GCS_BUCKET}"
     )
     if [[ "${DRY_RUN}" == "true" ]]; then
@@ -752,7 +689,6 @@ cmd_cleanup() {
     return 0
   fi
 
-  delete_instance_backups_and_instance "${SPANNER_SECONDARY_INSTANCE}"
   delete_instance_backups_and_instance "${SPANNER_INSTANCE}"
 
   echo "[OK] Workshop Cloud Spanner teardown complete. Run 'bash scripts/provision_workshop_env.sh cleanup --all' to also tear down Lab 6 resources & verify zero residual."
@@ -761,6 +697,5 @@ cmd_cleanup() {
 case "${COMMAND}" in
   create) cmd_create ;;
   apply-postload) cmd_apply_postload ;;
-  backup-to-singapore) cmd_backup_to_singapore ;;
   cleanup) cmd_cleanup ;;
 esac

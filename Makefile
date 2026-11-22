@@ -34,11 +34,10 @@ LAB ?= all
 MODE ?= full
 PRESET ?= all
 REGION ?= asia-southeast3
-DR_BACKUP_REGION ?=
+VERTEX_AI_LOCATION ?= asia-southeast1
 WORKSHEET ?=
 SPANNER_PROCESSING_UNITS ?= 100
 STRICT_GCP ?=
-REQUIRE_DR ?=
 DRY_RUN ?=
 
 .PHONY: help preflight install install-mcp test validate-skills \
@@ -48,9 +47,11 @@ DRY_RUN ?=
 
 help: ## Print available workshop targets, variables, and quickstart examples
 	@echo "Cloud Spanner Enterprise SDLC Knowledge Graph & GraphRAG Workshop"
+	@echo "Architecture: Bangkok (asia-southeast3) single-region primary (Spanner, Cloud Run, Secrets, GCS, backups)"
+	@echo "              + Singapore (asia-southeast1) ONLY for Vertex AI, Model Armor & Cloud DLP (unavailable in Bangkok)"
 	@echo ""
-	@echo "Usage: make <target> [TRACK=starter|solution] [LAB=1..8|all] [MODE=full|express] [PRESET=all|workshop|small|medium|large] [REGION=asia-southeast3|asia-southeast1|us-central1]"
-	@echo "Defaults: PYTHON=$(PYTHON) | TRACK=$(TRACK) | LAB=$(LAB) | MODE=$(MODE) | PRESET=$(PRESET) | REGION=$(REGION)"
+	@echo "Usage: make <target> [TRACK=starter|solution] [LAB=1..8|all] [MODE=full|express] [PRESET=all|workshop|small|medium|large] [REGION=asia-southeast3]"
+	@echo "Defaults: PYTHON=$(PYTHON) | TRACK=$(TRACK) | LAB=$(LAB) | MODE=$(MODE) | PRESET=$(PRESET) | REGION=$(REGION) | VERTEX_AI_LOCATION=$(VERTEX_AI_LOCATION)"
 	@echo ""
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@echo ""
@@ -65,7 +66,7 @@ help: ## Print available workshop targets, variables, and quickstart examples
 	@echo "  make TRACK=starter verify-lab LAB=1"
 	@echo "  make TRACK=starter MODE=express verify-lab LAB=1"
 	@echo "  make TRACK=solution verify-lab LAB=all"
-	@echo "  make sizing PRESET=all REGION=asia-southeast3 DR_BACKUP_REGION=asia-southeast1"
+	@echo "  make sizing PRESET=all REGION=asia-southeast3"
 	@echo "  make sizing WORKSHEET=starter/tools/customer_scale_worksheet.json"
 	@echo "  make dry-run-pipelines"
 	@echo "  make demo-mcp-mock"
@@ -159,21 +160,18 @@ lab1-no-docker: ## Run Zero-Docker Lab 1 Neo4j CE & APOC streaming simulator, pa
 		echo "  make TRACK=starter MODE=express verify-lab LAB=1  # Express Track A (queries 1-3)"; \
 	fi
 
-sizing: ## Run verified 2026 Bangkok/Singapore sizing & 3-store TCO calculator (supports PRESET, REGION, DR_BACKUP_REGION, WORKSHEET)
+sizing: ## Run verified 2026 Bangkok single-region sizing & 3-store TCO calculator (supports PRESET, REGION, WORKSHEET; $0 cross-region egress)
 	@set -eu; \
 	ARGS=""; \
-	if [ -n "$(DR_BACKUP_REGION)" ]; then \
-		ARGS="$$ARGS --dr-backup-region $(DR_BACKUP_REGION)"; \
-	fi; \
 	if [ -n "$(WORKSHEET)" ]; then \
 		if [ "$(origin REGION)" = "command line" ]; then \
-			ARGS="--region $(REGION) $$ARGS"; \
+			ARGS="--region $(REGION)"; \
 		fi; \
 		echo "==> Running sizing calculator with worksheet $(WORKSHEET)..."; \
 		$(PYTHON) solution/tools/sizing_calculator.py --worksheet "$(WORKSHEET)" $$ARGS; \
 	else \
-		echo "==> Running sizing calculator (PRESET=$(PRESET), REGION=$(REGION))..."; \
-		$(PYTHON) solution/tools/sizing_calculator.py --preset "$(PRESET)" --region "$(REGION)" $$ARGS; \
+		echo "==> Running sizing calculator (PRESET=$(PRESET), REGION=$(REGION), single-region backups)..."; \
+		$(PYTHON) solution/tools/sizing_calculator.py --preset "$(PRESET)" --region "$(REGION)"; \
 	fi
 
 dry-run-pipelines: ## Dry-run Path A loader, Path B GraphRAG ingest, post-load orchestrator & Hero offline replay (stdlib only)
@@ -192,18 +190,18 @@ demo-mcp-mock: ## Run Lab 6 3-persona RBAC & prompt-injection fail-closed demo o
 	@echo "==> Running Lab 6 multi-agent RBAC & prompt-injection fail-closed demo (--mock)..."
 	$(PYTHON) solution/mcp/adk_multi_agent_demo.py --mock
 
-provision-gcp: ## [LIVE GCP] Provision Bangkok 100-PU Enterprise sandbox (supports TRACK=starter|solution, REGION=asia-southeast1 fallback)
-	@echo "==> Provisioning Cloud Spanner Enterprise sandbox in $(REGION) ($(SPANNER_PROCESSING_UNITS) PU, TRACK=$(TRACK))..."; \
-	bash scripts/provision_workshop_env.sh create --region "$(REGION)" --processing-units "$(SPANNER_PROCESSING_UNITS)" --track "$(TRACK)" $(if $(filter 1 true TRUE yes YES,$(DRY_RUN)),--dry-run,)
+provision-gcp: ## [LIVE GCP] Provision Bangkok (asia-southeast3) 100-PU Enterprise sandbox (supports TRACK=starter|solution; Vertex AI in asia-southeast1)
+	@echo "==> Provisioning Cloud Spanner Enterprise sandbox in $(REGION) ($(SPANNER_PROCESSING_UNITS) PU, TRACK=$(TRACK), Vertex AI=$(VERTEX_AI_LOCATION))..."; \
+	bash scripts/provision_workshop_env.sh create --region "$(REGION)" --vertex-location "$(VERTEX_AI_LOCATION)" --processing-units "$(SPANNER_PROCESSING_UNITS)" --track "$(TRACK)" $(if $(filter 1 true TRUE yes YES,$(DRY_RUN)),--dry-run,)
 
-verify-live: ## [LIVE GCP] Run end-to-end live Cloud Spanner verification (DDL, ScaNN PLAN, Hero Query B, FGAC & DR)
-	@echo "==> Running live Cloud Spanner verification suite in $(REGION)..."; \
-	bash scripts/verify_live_gcp.sh --region "$(REGION)" $(if $(filter 1 true TRUE yes YES,$(REQUIRE_DR)),--require-dr,) $(if $(filter 1 true TRUE yes YES,$(DRY_RUN)),--dry-run,)
+verify-live: ## [LIVE GCP] Run end-to-end live Cloud Spanner verification (DDL, ScaNN PLAN, Hero Query B, FGAC, Bangkok residency & Vertex AI)
+	@echo "==> Running live Cloud Spanner verification suite in $(REGION) (Vertex AI=$(VERTEX_AI_LOCATION))..."; \
+	bash scripts/verify_live_gcp.sh --region "$(REGION)" --vertex-location "$(VERTEX_AI_LOCATION)" $(if $(filter 1 true TRUE yes YES,$(DRY_RUN)),--dry-run,)
 
-cleanup-gcp: ## [LIVE GCP] Delete workshop Cloud Spanner instance, database, and DR backup copies cleanly
-	@echo "==> Cleaning up Cloud Spanner workshop environment..."; \
+cleanup-gcp: ## [LIVE GCP] Delete workshop Bangkok Cloud Spanner instance, database, and same-region backups cleanly
+	@echo "==> Cleaning up Cloud Spanner workshop environment in $(REGION)..."; \
 	bash scripts/provision_workshop_env.sh cleanup --region "$(REGION)" $(if $(filter 1 true TRUE yes YES,$(DRY_RUN)),--dry-run,)
 
-cleanup-all-gcp: ## [LIVE GCP] Full teardown (Cloud Run MCP, Secrets, SAs, DLP/Model Armor, GCS, Spanner) + zero-residual audit
+cleanup-all-gcp: ## [LIVE GCP] Full teardown (Bangkok Spanner/Cloud Run/Secrets/GCS, SAs, Singapore DLP/Model Armor) + zero-residual audit
 	@echo "==> Running full workshop GCP teardown (--all) and zero-residual verification..."; \
 	bash scripts/provision_workshop_env.sh cleanup --all --region "$(REGION)" $(if $(filter 1 true TRUE yes YES,$(DRY_RUN)),--dry-run,)

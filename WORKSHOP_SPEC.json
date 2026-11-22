@@ -7,8 +7,11 @@
   "target_dialect": "GOOGLE_STANDARD_SQL",
   "target_edition": "ENTERPRISE",
   "defaults": {
+    "primary_region": "asia-southeast3",
+    "companion_ai_security_region": "asia-southeast1",
     "google_cloud_region": "asia-southeast3",
     "google_cloud_secondary_region": "asia-southeast1",
+    "spanner_single_region_only": true,
     "vertex_ai_location": "asia-southeast1",
     "vertex_ai_embedding_location": "asia-southeast1",
     "vertex_ai_fallback_location": "global",
@@ -19,7 +22,6 @@
     "embedding_column_type": "ARRAY<FLOAT32>(vector_length=>768)",
     "llm_model": "gemini-2.5-flash",
     "spanner_instance_config": "regional-asia-southeast3",
-    "spanner_secondary_instance_config": "regional-asia-southeast1",
     "spanner_instance": "sdlc-kg-enterprise",
     "spanner_database": "sdlc_knowledge_graph",
     "spanner_edition": "ENTERPRISE",
@@ -28,12 +30,22 @@
     "default_backup_schedule_type_workshop": "NONE",
     "default_backup_schedule_type_production": "AUTOMATIC",
     "model_armor_location": "asia-southeast1",
-    "model_armor_endpoint": "modelarmor.asia-southeast1.rep.googleapis.com"
+    "model_armor_endpoint": "modelarmor.asia-southeast1.rep.googleapis.com",
+    "cloud_dlp_location": "asia-southeast1"
   },
   "regional_architecture": {
+    "architecture_mode": "single_region_bangkok_core_plus_singapore_companion_ai_security",
+    "companion_ai_security_region": "asia-southeast1",
     "primary_region": {
       "region": "asia-southeast3",
       "city": "Bangkok, Thailand",
+      "architecture_role": "primary_and_only_database_and_app_region",
+      "services_hosted": [
+        "Cloud Spanner Enterprise (regional-asia-southeast3, single regional instance, 3-zone sync quorum a/b/c, 99.99% SLA, same-region Bangkok backups & 7-day PITR)",
+        "Cloud Run MCP Toolbox services (asia-southeast3)",
+        "Secret Manager (user-managed replication in asia-southeast3)",
+        "Cloud Storage staging & Dataflow (asia-southeast3)"
+      ],
       "spanner_instance_config": "regional-asia-southeast3",
       "spanner_edition": "ENTERPRISE",
       "sla": "99.99%",
@@ -80,12 +92,12 @@
       "data_boost_per_1000_spu_hour_usd": 1.2285,
       "intra_region_replication_per_gib_usd": 0.0,
       "workshop_100pu_8hr_compute_usd": 1.0332,
-      "notes": "Verified live from cloud.google.com/spanner/pricing (2026). Regional 3-zone synchronous quorum in Bangkok; Thailand PDPA data residency."
+      "notes": "Verified live from cloud.google.com/spanner/pricing (2026). Primary and ONLY database/app region: single Cloud Spanner Enterprise regional instance with 3-zone synchronous quorum in Bangkok (99.99% SLA, Thailand PDPA data residency, same-region Bangkok backups/PITR). No 2-region Spanner DR instance."
     },
     "secondary_region": {
       "region": "asia-southeast1",
       "city": "Singapore",
-      "spanner_instance_config": "regional-asia-southeast1",
+      "architecture_role": "companion_ai_and_security_only_no_spanner_dr",
       "spanner_edition": "ENTERPRISE",
       "sla": "99.99%",
       "regional_multiplier_vs_us_central1": 1.144,
@@ -126,13 +138,11 @@
       "data_boost_per_1000_spu_hour_usd": 1.33848,
       "workshop_100pu_8hr_compute_usd": 1.1257,
       "roles_in_architecture": [
-        "Vertex AI GenAI & Embedding regional endpoint (gemini-embedding-001, gemini-2.5-flash) — GA in asia-southeast1 (~25ms RTT from Bangkok)",
-        "Cross-region Spanner backup copy destination (gcloud spanner backups copy) for Thailand regional DR",
-        "Optional warm/passive DR Spanner Enterprise instance fed via Spanner Change Streams + Dataflow",
-        "Model Armor regional template endpoint (modelarmor.asia-southeast1.rep.googleapis.com; supports RAI, SDP, prompt injection/jailbreak; note cross-jurisdictional routing impact for Thailand PDPA)",
-        "Secondary/fallback lab region if a customer GCP project lacks quota in asia-southeast3"
+        "Vertex AI GenAI & Embedding regional endpoint (gemini-embedding-001, gemini-2.5-flash) — unavailable in asia-southeast3 (~25ms RTT from Bangkok)",
+        "Model Armor regional template endpoint (modelarmor.asia-southeast1.rep.googleapis.com) — unavailable in asia-southeast3 (RAI, prompt injection & jailbreak; document cross-jurisdictional prompt transit for Thailand PDPA)",
+        "Cloud DLP / Sensitive Data Protection (asia-southeast1) — companion inspection template paired with Model Armor"
       ],
-      "dual_region_note": "Cloud Spanner does not currently offer a pre-built dual-region or multi-region config pairing asia-southeast3 + asia-southeast1 (dual-region is AU/CA/DE/IN/JP; asia2 is Mumbai/Delhi/Singapore). Use regional-asia-southeast3 primary + cross-region backup copy or Change Streams async DR to regional-asia-southeast1."
+      "single_region_spanner_note": "Single-region Bangkok architecture: Cloud Spanner, Cloud Run MCP Toolbox, Secret Manager (user-managed), GCS, and Dataflow run strictly in Bangkok (asia-southeast3 / regional-asia-southeast3) with same-region Bangkok backups and 7-day PITR. Singapore (asia-southeast1) is used ONLY as a companion region for Vertex AI, Model Armor, and Cloud DLP (unavailable in Bangkok) and listed here purely as a verified 2026 regional pricing benchmark — NO second Spanner DR instance and NO cross-region backup copy in this workshop."
     },
     "reference_us_region": {
       "region": "us-central1",
@@ -155,7 +165,7 @@
       },
       "data_boost_per_1000_spu_hour_usd": 1.17
     },
-    "cross_region_backup_egress_asia_per_gib_usd": 0.08,
+    "default_cross_region_dr_egress_usd": 0.0,
     "workshop_attendee_budget_8hr_bangkok_usd": {
       "spanner_100pu_enterprise_compute": 1.0332,
       "storage_vertex_ai_and_misc_estimate": 0.12,
@@ -809,7 +819,7 @@
       "path": ".agents/skills/spanner-enterprise-platform-ops",
       "primary_labs": [2, 7, 8],
       "support_labs": [3],
-      "description": "Guides Cloud Spanner platform ops, editions, dialects, CLI/SDKs, and DR topology. Use when selecting Standard/Enterprise/Enterprise Plus editions, CUDs, or Free Trial; configuring regional/multi-region topologies (e.g., Bangkok regional-asia-southeast3 + Singapore backup DR), GoogleSQL vs PostgreSQL dialects, KV APIs, Spanner Queues, gcloud/SDK/PGAdapter/Emulator, autoscaler deployment & eligibility, geo-partitioning, read leases, move-instance, PITR, backups, or deletion protection. Don't use for table/index/FK/view/TTL/locality DDL (spanner-schema-and-data-modeling), Property Graphs/GQL (spanner-graph-modeling-and-gql), FTS/Vector/GraphRAG (spanner-search-ai-and-graphrag), migrations (spanner-migration-and-neo4j-playbook), MCP/FGAC security (spanner-mcp-toolbox-and-agent-security), or CPU tuning/query plans/TCO sizing (spanner-performance-observability-and-sizing).",
+      "description": "Guides Cloud Spanner platform ops, editions, dialects, CLI/SDKs, and regional topology. Use when selecting Standard/Enterprise/Enterprise Plus editions, CUDs, or Free Trial; configuring regional/multi-region topologies (e.g., Bangkok regional-asia-southeast3 single-region 3-zone quorum), GoogleSQL vs PostgreSQL dialects, KV APIs, Spanner Queues, gcloud/SDK/PGAdapter/Emulator, autoscaler deployment & eligibility, geo-partitioning, read leases, move-instance, PITR, backups, or deletion protection. Don't use for table/index/FK/view/TTL/locality DDL (spanner-schema-and-data-modeling), Property Graphs/GQL (spanner-graph-modeling-and-gql), FTS/Vector/GraphRAG (spanner-search-ai-and-graphrag), migrations (spanner-migration-and-neo4j-playbook), MCP/FGAC security (spanner-mcp-toolbox-and-agent-security), or CPU tuning/query plans/TCO sizing (spanner-performance-observability-and-sizing).",
       "references": [
         "editions-and-tier-selection.md",
         "dialects-kv-and-queues.md",
@@ -1039,7 +1049,7 @@
     },
     {
       "req_num": 7,
-      "name": "Enterprise Sizing, Verified Bangkok/Singapore Regional Pricing & 3-Store Consolidation TCO",
+      "name": "Enterprise Sizing, Verified Bangkok Single-Region Pricing & 3-Store Consolidation TCO",
       "lab_ids": [7, 8],
       "doc": "docs/07_sizing_and_cost_tco.md",
       "primary_skills": ["spanner-performance-observability-and-sizing", "spanner-enterprise-platform-ops", "spanner-graph-modeling-and-gql"],
@@ -1071,7 +1081,7 @@
     },
     {
       "lab": 2,
-      "title": "Acme Commerce Two-Path SDLC Corpus & Bangkok + Singapore Topology",
+      "title": "Acme Commerce Two-Path SDLC Corpus & Bangkok Single-Region Architecture",
       "doc": "docs/02_two_path_sdlc_workshop.md",
       "track_a_minutes": 20,
       "track_b_minutes": 45,
@@ -1167,7 +1177,7 @@
     },
     {
       "lab": 7,
-      "title": "Enterprise Sizing, Bangkok/Singapore Pricing & 3-Store TCO Workshop",
+      "title": "Enterprise Sizing, Bangkok Single-Region Pricing & 3-Store TCO Workshop",
       "doc": "docs/07_sizing_and_cost_tco.md",
       "track_a_minutes": 20,
       "track_b_minutes": 45,
@@ -1179,7 +1189,7 @@
     },
     {
       "lab": 8,
-      "title": "Observability, Spanner Studio Visualizations, Pre-Splitting, DR & Teardown",
+      "title": "Observability, Spanner Studio Visualizations, Pre-Splitting & Teardown",
       "doc": "docs/08_observability_and_troubleshooting.md",
       "track_a_minutes": 15,
       "track_b_minutes": 30,
@@ -1204,7 +1214,7 @@
     {"lab": 6, "file": "starter/sql/04_fgac_roles_views.sql", "todo_marker": "TODO(Lab 6)", "objective": "Create PublicApiCatalogView (SQL SECURITY INVOKER) and least-privilege GRANT statements for sdlc_readonly_role."},
     {"lab": 6, "file": "starter/mcp/tools.yaml", "todo_marker": "TODO(Lab 6)", "objective": "Configure Vertex AI regional embeddingModels (gemini-embedding-001 in asia-southeast1 via ADC), OIDC authServices binding @caller_email, curated readOnly spanner-sql tools, and isolated persona toolsets (never databaseRole or spanner-execute-sql)."},
     {"lab": 6, "file": "starter/mcp/adk_multi_agent_demo.py", "todo_marker": "TODO(Lab 6)", "objective": "Bind isolated persona toolsets and verify OIDC authenticated parameter fail-closed behavior against prompt injection."},
-    {"lab": 7, "file": "starter/tools/customer_scale_worksheet.json", "todo_marker": "TODO(Lab 7)", "objective": "Customize enterprise nodes/edges/chunks/QPS, Bangkok primary & Singapore DR backup settings, validate via sizing_calculator.py --worksheet, and update todo_status from TODO(Lab 7) to COMPLETED."},
+    {"lab": 7, "file": "starter/tools/customer_scale_worksheet.json", "todo_marker": "TODO(Lab 7)", "objective": "Customize enterprise nodes/edges/chunks/QPS for pure Bangkok single-region Enterprise (asia-southeast3, $0 cross-region DR egress), validate via sizing_calculator.py --worksheet, and update todo_status from TODO(Lab 7) to COMPLETED."},
     {"lab": 8, "file": "starter/sql/11_observability_and_studio_viz.sql", "todo_marker": "TODO(Lab 8)", "objective": "Author Spanner Studio RETURN SAFE_TO_JSON(p) blast-radius path visualization query and SPANNER_SYS Query/Lock (microsecond-to-second)/Split-Point introspection queries."}
   ],
   "sizing_presets": {

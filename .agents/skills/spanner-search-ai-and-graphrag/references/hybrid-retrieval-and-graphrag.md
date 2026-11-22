@@ -3,9 +3,9 @@
 Comprehensive production reference for **server-side hybrid full-text + vector
 search** (RRF, RSF, filtered KNN, two-stage `ML.PREDICT` cross-encoder
 reranking), **Spanner Graph + FTS/Vector (`NEXT` and `GRAPH_TABLE`)**,
-end-to-end **GraphRAG reference architecture** (regional primary + nearest
-Vertex AI/DR region), full **GoogleSQL vs PostgreSQL dialect parity**, and
-verified **anti-patterns**.
+end-to-end **GraphRAG reference architecture** (single-region primary +
+companion Vertex AI / Model Armor / DLP region), full **GoogleSQL vs PostgreSQL
+dialect parity**, and verified **anti-patterns**.
 
 ## 1. Hybrid Full-Text + Vector Search Patterns
 
@@ -317,15 +317,18 @@ GraphRAG closes flat RAG's multi-hop blind spot by unifying the **knowledge
 graph, full-text tokens, and vector embeddings** inside a single ACID Cloud
 Spanner Enterprise database.
 
-### Two-Subsystem Regional Topology (Example: Bangkok Primary + Singapore AI/DR)
-1. **Event-Driven Data Ingestion Subsystem (Data-Resident Primary, e.g., `asia-southeast3`):**
+### Two-Subsystem Regional Topology (Example: Bangkok Primary + Singapore Companion Services)
+1. **Event-Driven Data Ingestion Subsystem (Single Primary Region, e.g., `asia-southeast3`):**
    - **Cloud Storage** regional bucket (`asia-southeast3`, Standard class,
-     Object Lifecycle Management, parallel composite uploads, CMEK/CSEK, Cloud
-     DLP / Sensitive Data Protection PII de-identification).
+     Object Lifecycle Management, parallel composite uploads, CMEK/CSEK; pair
+     with companion **Cloud DLP / Sensitive Data Protection** templates in
+     `asia-southeast1` alongside Model Armor where unavailable in primary).
    - Object finalized -> **Pub/Sub** topic (message storage policy pinned to
      `asia-southeast3`, flow control, retries, CMEK) -> **Cloud Run Functions**
-     (`asia-southeast3`, tuned memory/CPU, Binary Authorization, CMEK).
-   - **KG Extraction & Chunking:** Invoke **Gemini** (`asia-southeast1`) +
+     (`asia-southeast3`, tuned memory/CPU, user-managed Secret Manager in
+     `asia-southeast3`, Binary Authorization, CMEK).
+   - **KG Extraction & Chunking:** Invoke companion **Gemini** (`asia-southeast1`,
+     ~25 ms RTT, used because Vertex AI is unavailable in `asia-southeast3`) +
      LangChain `LLMGraphTransformer` with explicit schema allowlists
      (`allowed_nodes`, `allowed_relationships`, `node_properties`,
      `relationship_properties`; for niche regulated domains like clinical
@@ -333,30 +336,33 @@ Spanner Enterprise database.
      enterprise KGs). Segment documents via `RecursiveCharacterTextSplitter` or
      **Document AI Layout Parser**, embed with `gemini-embedding-001` in
      `asia-southeast1`, and commit nodes, edges, chunks, `TOKENLIST`s, and
-     `ARRAY<FLOAT32>` vectors atomically into **Spanner Enterprise
-     (`regional-asia-southeast3`)**.
+     `ARRAY<FLOAT32>` vectors atomically into the single **Spanner Enterprise
+     (`regional-asia-southeast3`)** instance.
 2. **Low-Latency Agentic Serving Subsystem:**
-   - Agent runtime on **Vertex AI Agent Engine**, **Cloud Run**, or **GKE** in
-     `asia-southeast3` embeds user query (`asia-southeast1`, ~25 ms RTT), runs
-     Spanner Graph ScaNN ANN + `NEXT` / Hybrid RRF in `regional-asia-southeast3`,
-     optionally reranks via **Vertex AI Search Ranking API** or in-DB
-     `ML.PREDICT`, and synthesizes grounded responses via **Gemini
-     (`gemini-2.5-flash` in `asia-southeast1`; `global` fallback only for LLM
-     synthesis when data residency allows cross-region routing — never for
-     `predict`-API embeddings)**.
+   - Agent runtime on **Cloud Run** or **GKE** in `asia-southeast3` (with
+     user-managed Secret Manager in `asia-southeast3`) embeds user query via
+     companion **Vertex AI** (`asia-southeast1`, ~25 ms RTT), screens prompts
+     and responses via companion **Model Armor** (`modelarmor.asia-southeast1.rep.googleapis.com`)
+     + **Cloud DLP** (`asia-southeast1`), runs Spanner Graph ScaNN ANN + `NEXT`
+     / Hybrid RRF in `regional-asia-southeast3`, optionally reranks via **Vertex
+     AI Search Ranking API** or in-DB `ML.PREDICT`, and synthesizes grounded
+     responses via **Gemini (`gemini-2.5-flash` in `asia-southeast1`; `global`
+     fallback only for LLM synthesis when data residency allows cross-region
+     routing — never for `predict`-API embeddings)**.
    - Emit Admin Activity + Data Access audit logs to regionalized **Cloud
      Logging** & **Cloud Monitoring**.
-3. **Reliability, Cost & DR Controls:**
+3. **Reliability, Cost & Data Protection Controls:**
    - **Vertex AI:** Handle HTTP 429 (`RESOURCE_EXHAUSTED`) via exponential
      backoff or **Provisioned Throughput**; enable **Zero Data Retention (ZDR)**
      and safety filters; cut token spend via **Context Caching** (repeated KG
      schemas/system prompts) and **Batch Inference** for offline KG extraction.
    - **Spanner Enterprise:** Enable **Managed Autoscaler**, **1-yr / 3-yr CUDs**
      (e.g., \$1.0332 / \$0.7749 per node-hr in `asia-southeast3` vs \$1.2915
-     on-demand), **database deletion protection**, **7-day PITR**, and scheduled
-     cross-region backup copies to `regional-asia-southeast1` (\$0.08/GiB Asia
-     egress + \$0.03432/GiB-mo backup storage; Spanner currently has no pre-built
-     Bangkok+Singapore dual-region config).
+     on-demand), **database deletion protection**, **7-day PITR**, and
+     **same-region incremental backup schedules** in `regional-asia-southeast3`
+     (\$0.0315/GiB-mo, \$0.00/GiB intra-region replication; 3-zone synchronous
+     quorum delivers 99.99% SLA with full Thailand PDPA residency and no second
+     Spanner instance).
 
 ## 4. GoogleSQL vs PostgreSQL Dialect Parity Matrix
 

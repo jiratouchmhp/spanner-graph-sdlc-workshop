@@ -1,6 +1,6 @@
 # Spanner FGAC, Per-Agent IAM, MCP Guardrails, Parameterized Views & Model Armor
 
-Defense-in-depth security architecture for autonomous Cloud Spanner agents: agent threat mitigations, two-layer IAM separation, IAM Allow/Deny CEL for managed remote MCP servers, Spanner FGAC DDL & system roles, Parameterized Views (`SECURE_CONTEXT()`), Model Armor regional/PDPA architecture, CMEK, VPC-SC, Cloud Audit Logs, and PITR/DR recovery.
+Defense-in-depth security architecture for autonomous Cloud Spanner agents: agent threat mitigations, two-layer IAM separation, IAM Allow/Deny CEL for managed remote MCP servers, Spanner FGAC DDL & system roles, Parameterized Views (`SECURE_CONTEXT()`), Model Armor & Cloud DLP regional/PDPA architecture, CMEK, VPC-SC, Cloud Audit Logs, and PITR/backup recovery.
 
 ---
 
@@ -175,7 +175,7 @@ GRANT SELECT ON VIEW SecureCustomerOrders TO ROLE support_agent_ro;
 
 ---
 
-## 6. Model Armor & Regional Data Residency (Bangkok + Singapore)
+## 6. Model Armor, Cloud DLP & Regional Data Residency (Bangkok Primary + Singapore Companion)
 
 ### Mode A — Project-Wide Floor Settings for Managed Remote MCP Servers
 Managed via global endpoint `modelarmor.googleapis.com`; screens **only** `tools/call` (request + response), `prompts/get` (request + response), and **MCP tool execution errors** (mitigates indirect prompt injection via error payloads). Does **not** screen `tools/list`, `resources/*`, `notifications/*`, streaming SSE payloads, or protocol errors. Applies project-wide across all integrated services (Vertex AI + MCP) using fixed `v1` filters.
@@ -197,7 +197,7 @@ gcloud model-armor floorsettings update \
 
 ### Mode B — Regional Template Screening in ADK / LangChain (For MCP Toolbox Agents)
 Self-hosted MCP Toolbox does not call Model Armor internally—invoke it in ADK `before_model_callback`/`after_model_callback`, LangChain `ModelArmorMiddleware`, or an API Gateway using `roles/modelarmor.user` (runtime) and `roles/modelarmor.admin` (template authoring).
-- **Singapore Regional Endpoint:** `modelarmor.asia-southeast1.rep.googleapis.com` (`projects/{project_id}/locations/asia-southeast1/templates/{template_id}`).
+- **Singapore Companion Regional Endpoint:** `modelarmor.asia-southeast1.rep.googleapis.com` (`projects/{project_id}/locations/asia-southeast1/templates/{template_id}`), paired with companion **Cloud DLP / Sensitive Data Protection** inspection/de-identification templates in `asia-southeast1` (used strictly because Model Armor is unavailable in `asia-southeast3`).
 - **Verified `asia-southeast1` Capabilities Under Strict Data Residency (`limited-support`, `at_rest/in_use/in_transit: Yes`):**
   - **Supported:** Responsible AI (`rai`), Sensitive Data Protection (`sdp` basic secrets + Advanced DLP `DeidentifyTemplate`), Prompt Injection & Jailbreak (`pi_and_jailbreak`).
   - **Not Supported under DRZ in `asia-southeast1`:** `malicious_uri`, `csam`, `topicality`, multi-language translation, image scanning, antivirus (`gavs`).
@@ -207,7 +207,7 @@ Self-hosted MCP Toolbox does not call Model Armor internally—invoke it in ADK 
 ## 7. CMEK, Network Perimeter, Audit Logs, Request Tags & Recovery
 
 - **CMEK / EKM (Zero Spanner Surcharge or SLA Impact):**
-  - Match KMS keyring region strictly to Spanner region: **`asia-southeast3`** KMS key for Bangkok primary (`regional-asia-southeast3`), and **`asia-southeast1`** KMS key for Singapore DR backup copies. Grant `roles/cloudkms.cryptoKeyEncrypterDecrypter` to Spanner Service Agent `service-{project_number}@gcp-sa-spanner.iam.gserviceaccount.com` (provision via `gcloud beta services identity create --service=spanner.googleapis.com`).
+  - Match KMS keyring region strictly to your Spanner instance region (e.g., **`asia-southeast3`** KMS key for a single-region Bangkok `regional-asia-southeast3` instance and its same-region backups; multi-region/geo-partitioned instances require one regional KMS key per replica/partition region). Grant `roles/cloudkms.cryptoKeyEncrypterDecrypter` to Spanner Service Agent `service-{project_number}@gcp-sa-spanner.iam.gserviceaccount.com` (provision via `gcloud beta services identity create --service=spanner.googleapis.com`).
   - **Availability Hazards:** Key disable/destroy propagates up to **3 hours** (5-min KMS polling); during KMS outage Spanner runs best-effort up to **1 hour** before returning `FAILED_PRECONDITION`; **databases left CMEK-disabled > 7 consecutive days are AUTOMATICALLY PERMANENTLY DELETED**. Keep old keys during in-place rotation until `encryptionInfo` shows only new keys, and retain old keys for existing backups.
 - **Network Perimeter & Edition Policy:** Spanner supports **VPC Service Controls (VPC-SC)** and **Private Service Connect (PSC)** (no static public IPs; no PSA). Restrict edition sprawl with org policy `constraints/spanner.managed.restrictCloudSpannerEditions` (note: managed autoscaler can still update non-compliant instances; customer autoscalers are blocked).
 - **Cloud Audit Logs (Enable Data Access Explicitly!):** `ADMIN_WRITE` is on by default, but **`DATA_READ` and `DATA_WRITE` are OFF by default**—enable both for `spanner.googleapis.com` AND `DATA_READ` for managed MCP servers (filter MCP traffic with `protoPayload.serviceName="spanner.googleapis.com/mcp"`). Note `AuditLog.metadata.processingDurationSeconds` records backend + API latency for `Commit`/`ExecuteSql` (omitted on streaming/partitioned RPCs). Alert on unexpected agent writes:
@@ -217,7 +217,7 @@ Self-hosted MCP Toolbox does not call Model Armor internally—invoke it in ADK 
   AND protoPayload.authenticationInfo.principalEmail=~".*@.*\\.iam\\.gserviceaccount\\.com"
   ```
 - **Request Tags & Application Logging:** Remote Spanner MCP auto-tags `mcp_execute_sql_readonly`, `mcp_execute_sql`, `mcp_commit` (inspect via `SPANNER_SYS.QUERY_STATS_TOP_10MINUTE` / `TXN_STATS_TOP_10MINUTE` / `LOCK_STATS_TOP_10MINUTE`). Tags cap at **50 ASCII chars** (`32–126`, leading `_` stripped, case-sensitive)—**never embed PII in tags**! Log tool name, raw arguments, HitM vs AO mode, and end-user session ID at the application layer.
-- **Last-Line Data Recovery:** Rely on **7-day PITR** (all editions, microsecond recovery from compromised write agents), **Enterprise Incremental Backups** (`$0.0315/GiB-mo` Bangkok), and **cross-region DR backup copies** via `gcloud spanner backups copy` to `regional-asia-southeast1` (`$0.08/GiB` Asia egress + `$0.03432/GiB-mo` Singapore storage). Always re-apply FGAC IAM bindings after backup restore.
+- **Last-Line Data Recovery:** Rely on **7-day PITR** (all editions, microsecond recovery from compromised write agents), **same-region Enterprise Incremental Backups** (`$0.0315/GiB-mo` in Bangkok, `$0.00/GiB` intra-region replication), and `--enable-drop-protection`. Where multi-region recovery is mandated and data residency permits, use Enterprise Plus multi-region configs or scheduled backup copies. Always re-apply FGAC IAM bindings after any backup restore.
 
 ---
 

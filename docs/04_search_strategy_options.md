@@ -1,6 +1,6 @@
 # Module 4: Multi-Model Search & Graph Algorithm Strategy Evaluation
 
-**Customer Requirement 4:** Evaluate every native retrieval and analytical capability inside **Cloud Spanner Enterprise** side-by-side — ISO GQL traversals, Serverless Data Boost Graph Algorithms, Full-Text Search (FTS), Fuzzy N-grams, JSON/Numeric tokenized filtering, Exact KNN, and ScaNN ANN — so architects choose the optimal strategy for each SDLC query class.
+**Customer Requirement 4:** Evaluate every native retrieval and analytical capability inside our single-region Bangkok **Cloud Spanner Enterprise** database (`regional-asia-southeast3`) side-by-side — ISO GQL traversals, Serverless Data Boost Graph Algorithms, Full-Text Search (FTS), Fuzzy N-grams, JSON/Numeric tokenized filtering, Exact KNN, and ScaNN ANN — so architects choose the optimal strategy for each SDLC query class.
 
 - **Duration:** Track A (4h Express): `25 min` | Track B (8h Deep-Dive): `60 min`
 - **Primary Antigravity Skills:** [`spanner-search-ai-and-graphrag`](../.agents/skills/spanner-search-ai-and-graphrag/SKILL.md), [`spanner-graph-modeling-and-gql`](../.agents/skills/spanner-graph-modeling-and-gql/SKILL.md)

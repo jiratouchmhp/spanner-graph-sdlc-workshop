@@ -1,19 +1,19 @@
 # Lab Checkpoints, `Makefile` Targets & Troubleshooting Runbook
 
-Operational handbook for running Labs 1–8 across **Track A (4-Hour Express)** and **Track B (1-Day Deep-Dive)**, verifying all **15 `starter/` `TODO(Lab 1-8)`** exercises against `solution/`, executing the live Bangkok/Singapore lifecycle safely, and resolving workshop-specific errors.
+Operational handbook for running Labs 1–8 across **Track A (4-Hour Express)** and **Track B (1-Day Deep-Dive)**, verifying all **15 `starter/` `TODO(Lab 1-8)`** exercises against `solution/`, executing the live Bangkok single-region (+ Singapore companion AI/Model Armor/DLP) lifecycle safely, and resolving workshop-specific errors.
 
 ## 1. Delivery Tracks, Timeboxes & Instructor Proof Points
 
 | Lab | Req # | Participant Guide (`docs/`) | Track A (4h) | Track B (8h) | Primary Skill(s) | Key Live "Aha!" Demo Cue |
 | :-: | :-: | :--- | :-: | :-: | :--- | :--- |
 | **1** | 1 | `docs/01_neo4j_community_migration.md` | 30m | 60m | `spanner-migration-and-neo4j-playbook` | Run upstream query on `svc-orders` without `TRAIL` (loops on `svc-notifications`), then add `MATCH TRAIL` for openCypher parity |
-| **2** | 2 | `docs/02_two_path_sdlc_workshop.md` | 20m | 45m | `sdlc-graphrag-workshop-guide`, `spanner-enterprise-platform-ops` | Inspect 68 nodes + 174 explicit + 60 dual-projected edges (234 logical) + 45 Markdown docs + Bangkok/Singapore PDPA split |
+| **2** | 2 | `docs/02_two_path_sdlc_workshop.md` | 20m | 45m | `sdlc-graphrag-workshop-guide`, `spanner-enterprise-platform-ops` | Inspect 68 nodes + 174 explicit + 60 dual-projected edges (234 logical) + 45 Markdown docs + Bangkok primary / Singapore companion split |
 | **3** | 3 | `docs/03_database_design_and_ingestion.md` | 45m | 90m | `spanner-schema-and-data-modeling`, `spanner-graph-modeling-and-gql` | Contrast `ServiceCallsApi` (interleaved + dest FK cascade) vs `ServiceDependsOnService` (standalone dual-FK avoiding `INV-06`) |
 | **4** | 4 | `docs/04_search_strategy_options.md` | 25m | 60m | `spanner-search-ai-and-graphrag`, `spanner-graph-modeling-and-gql` | Compare `SdlcSynonymDict` + `enhance_query`, fuzzy n-grams, ScaNN ANN, and Data Boost `PageRank` (`svc-auth` hub) |
 | **5** | 5 | `docs/05_hybrid_retrieval_and_graphrag.md` | 45m | 75m | `spanner-search-ai-and-graphrag`, `spanner-graph-modeling-and-gql` | **Zero-Sync-Lag ACID Proof**: insert a new caller edge + Markdown chunk in one txn → re-run Hero Query B → **8 rows** appear immediately |
 | **6** | 6 | `docs/06_mcp_toolbox_agent_security.md` | 40m | 75m | `spanner-mcp-toolbox-and-agent-security` | **Prompt-Injection Fail-Closed**: run `make demo-mcp-mock` probing `team-security` as `team-checkout` → returns only `team-checkout` |
-| **7** | 7 | `docs/07_sizing_and_cost_tco.md` | 20m | 45m | `spanner-performance-observability-and-sizing`, `spanner-enterprise-platform-ops` | Toggle `--cold-hdd-pct 40` + `--dr-backup-region asia-southeast1` + 1-yr/3-yr CUDs to reveal 3-store TCO consolidation savings |
-| **8** | 7 | `docs/08_observability_and_troubleshooting.md` | 15m | 30m | `spanner-performance-observability-and-sizing`, `spanner-graph-modeling-and-gql`, `spanner-enterprise-platform-ops` | Render `RETURN SAFE_TO_JSON(p)` in Spanner Studio, inspect `SPANNER_SYS` lock wait in seconds, copy backup to Singapore, clean teardown |
+| **7** | 7 | `docs/07_sizing_and_cost_tco.md` | 20m | 45m | `spanner-performance-observability-and-sizing`, `spanner-enterprise-platform-ops` | Toggle `--cold-hdd-pct 40` + 1-yr/3-yr CUDs in Bangkok (`asia-southeast3`) to reveal 3-store TCO consolidation savings |
+| **8** | 7 | `docs/08_observability_and_troubleshooting.md` | 15m | 30m | `spanner-performance-observability-and-sizing`, `spanner-graph-modeling-and-gql`, `spanner-enterprise-platform-ops` | Render `RETURN SAFE_TO_JSON(p)` in Spanner Studio, inspect `SPANNER_SYS` lock wait in seconds, verify same-region Bangkok PITR/backup status, clean teardown |
 | **Total** | **1–7** | `docs/00_facilitator_guide.md` | **240m** | **480m** | All 8 skills under `.agents/skills/` | *Add 30–60 min breaks for full-day Track B delivery* |
 
 ## 2. Complete 15-File `starter/` → `solution/` Checkpoint Matrix
@@ -67,7 +67,7 @@ make TRACK=solution verify-lab LAB=all
 - **Reference**: `solution/sql/{04_fgac_roles_views.sql,04b_fgac_grants_rerunnable.sql}`, `solution/mcp/{tools.yaml,render_persona_tools.py,personas/*,iam_and_model_armor_setup.sh,adk_multi_agent_demo.py}`, `.antigravity/mcp_config.json`
 - **`verify_lab.py` Assertions**: Zero `TODO(Lab`; SQL view/grant clauses; valid YAML keys & Vertex AI config; `<track>/mcp/adk_multi_agent_demo.py --mock` exits `0`.
 
-### Lab 7 — Enterprise Sizing & Bangkok/Singapore TCO Worksheet (1 File)
+### Lab 7 — Enterprise Sizing & Bangkok TCO Worksheet (1 File)
 - **Starter**: `starter/tools/customer_scale_worksheet.json` (`TODO(Lab 7)` via `"todo_status"` field — valid JSON from the start so `--worksheet` parses cleanly).
 - **Reference**: `solution/tools/sizing_calculator.py`
 - **`verify_lab.py` Assertions**: Runs `sizing_calculator.py --preset all --json` and `--worksheet starter/tools/customer_scale_worksheet.json --json`; in `--track starter`, asserts `"todo_status"` no longer contains `TODO(Lab 7)` (update to `"COMPLETED"`).
@@ -96,16 +96,16 @@ make TRACK=solution verify-lab LAB=all
 | `dry-run-pipelines` | `make dry-run-pipelines` | No | Executes APOC stager, Path A + Path B loaders, `apply_postload.py` & Hero replay with `--dry-run` |
 | `demo-mcp-mock` | `make demo-mcp-mock` | No | Runs `solution/mcp/adk_multi_agent_demo.py --mock` (persona isolation + prompt-injection check) |
 | `provision-gcp` | `make provision-gcp` | **YES** | Calls `scripts/provision_workshop_env.sh create` (Bangkok 100-PU Enterprise sandbox; confirm first!) |
-| `verify-live` | `make verify-live` | **YES** | Runs 5-check live Cloud Spanner verification (`scripts/verify_live_gcp.sh`; DDL, ScaNN, Hero, FGAC, DR) |
-| `cleanup-gcp` | `make cleanup-gcp` | **YES** | Calls `scripts/provision_workshop_env.sh cleanup` (deletes Spanner backups/instances; confirm first!) |
-| `cleanup-all-gcp` | `make cleanup-all-gcp` | **YES** | Full teardown (Cloud Run MCP, Secrets, SAs, DLP/Model Armor, GCS, Spanner) + `verify_zero_residual.sh` |
+| `verify-live` | `make verify-live` | **YES** | Runs live Cloud Spanner verification (`scripts/verify_live_gcp.sh`; DDL, ScaNN, Hero, FGAC, Bangkok health) |
+| `cleanup-gcp` | `make cleanup-gcp` | **YES** | Calls `scripts/provision_workshop_env.sh cleanup` (deletes Bangkok Spanner backups/instance; confirm first!) |
+| `cleanup-all-gcp` | `make cleanup-all-gcp` | **YES** | Full teardown (BKK Cloud Run MCP, user-managed Secrets, GCS, Spanner + IAM + SG DLP/Model Armor) + `verify_zero_residual.sh` |
 
 ### 8-Module Offline Test Suite (`tests/`)
 
 1. `tests/test_sql_and_gql_invariants.py`: Enforces `INV-01`–`INV-09` across `solution/sql/01..11` and `.tmpl` files.
 2. `tests/test_dataset_and_hero_replay.py`: Verifies 68/174/60/234 counts, 100% FK RI, 45 Markdown docs & verbatim facts, `stage_apoc_export.py`, `--dry-run` loaders, and 7-row Hero fixture equality.
 3. `tests/test_mcp_toolbox_rbac.py`: Validates `tools.yaml` & 3 rendered persona YAMLs (no `databaseRole`, Vertex AI regional `project`+`location`, no `spanner-execute-sql`, OIDC `authServices`, dual-layer IAM script separation, `--mock` prompt-injection fail-closed).
-4. `tests/test_sizing_calculator.py`: Checks verified Bangkok/Singapore/Iowa 2026 SKU rates, CUDs, 4 presets, `>= 1,000` PU prod floor vs 100 PU workshop flag, Singapore backup DR egress, worksheet mode, and 3-store TCO savings `> 0`.
+4. `tests/test_sizing_calculator.py`: Checks verified Bangkok/reference 2026 SKU rates, CUDs, 4 presets, `>= 1,000` PU prod floor vs 100 PU workshop flag, worksheet mode, and 3-store TCO savings `> 0`.
 5. `tests/test_antigravity_skills.py`: Audits all 8 skills under `.agents/skills/` (frontmatter, `< 1024`-char descriptions, line limits, 1-level links, zero orphan/nested/broken links, zero leaks, Skills #1–#7 Acme-free).
 6. `tests/test_starter_vs_solution_parity.py`: Verifies all 15 `starter/` files fail `--track starter --lab 1..8` (and `MODE=express`), zero header `TODO` traps, `1e6`/`1000000` parity, and `--track solution --lab all` passes.
 7. `tests/test_docs_consistency.py`: Checks `README.md`, `WORKSHOP_CONTENT_PLAN.md`, `GEMINI.md`, `.agents/rules/spanner-graph-workshop.md`, `starter/README.md`, and `docs/00..08.md` for link integrity and 16-target spec alignment.
@@ -113,7 +113,10 @@ make TRACK=solution verify-lab LAB=all
 
 ## 4. Live Bangkok GCP Workshop Lifecycle & Verified Timings (Confirm Every Mutating Step)
 
-### Live-Verified Bangkok (`asia-southeast3`) + Singapore (`asia-southeast1`) Execution Timings
+### Live-Verified Bangkok (`asia-southeast3`) + Singapore Companion (`asia-southeast1`) Timings
+
+- **Primary & ONLY DB/App Region — Bangkok (`asia-southeast3` / `regional-asia-southeast3`)**: Single Cloud Spanner Enterprise instance (3-zone sync quorum, 99.99% SLA), Cloud Run MCP Toolbox, user-managed Secret Manager, GCS staging & Dataflow, same-region PITR/backups.
+- **Companion Region (Services Unavailable in Bangkok) — Singapore (`asia-southeast1`, ~25 ms RTT)**: Vertex AI (`gemini-embedding-001` & `gemini-2.5-flash`), Model Armor (`modelarmor.asia-southeast1.rep.googleapis.com`), Cloud DLP.
 
 | Stage | Live Command / Component | Verified Timing (100 PU) | Facilitator / Operational Tip |
 | :--- | :--- | :---: | :--- |
@@ -123,8 +126,8 @@ make TRACK=solution verify-lab LAB=all
 | **4-Stage Post-Load** | `apply-postload` (20 indexes + 5 FTS + ScaNN + `ANALYZE`) | **~10 min** | **Start right before the morning break** (or use `300` PU during live demos) |
 | **Hero & SQL/GQL Queries** | Hero A/B/C (7-row fixture) + Labs `04b`/`05`/`06`/`09`/`10`/`11` | **33–520 ms** | ScaNN `PLAN` confirms `VectorIndexScan`; FGAC `sdlc_readonly_role` ALLOW/DENY |
 | **Data Boost Graph Algos** | Lab 4 `08_graph_algorithms_criticality.sql` (`PageRank`, `WCC`, `ShortestPath`) | **~3 min** (all 3) | Requires caller `roles/spanner.graphIntelligenceUser` + Spanner SA write-back IAM |
-| **Lab 6 Full Deployment** | 3 BKK Cloud Run MCP + 3 Secrets + 7 SAs + FGAC + SG DLP/Model Armor | **~3–4 min** | Verified with Toolbox `v1.13.1` over OIDC-authenticated `/mcp` JSON-RPC 2.0 |
-| **Lab 8 Cross-Region DR** | `provision_workshop_env.sh backup-to-singapore` | **~35–40 min** (`100` PU: ~22m + ~18m) | Run async/facilitator demo; follow with `make cleanup-all-gcp` + `verify_zero_residual.sh` guaranteed teardown |
+| **Lab 6 Full Deployment** | 3 BKK Cloud Run MCP + 3 BKK Secrets + 7 SAs + FGAC + SG DLP/Model Armor | **~3–4 min** | Verified with Toolbox `v1.13.1` over OIDC-authenticated `/mcp` JSON-RPC 2.0 |
+| **Full Teardown** | `make cleanup-all-gcp` + `verify_zero_residual.sh` | **~2 min** | Deletes BKK Spanner/Cloud Run/Secrets/GCS + IAM + SG DLP/Model Armor with zero-residual audit |
 
 > **Clean CLI Setup Tip:** Run `gcloud auth application-default set-quota-project "$GOOGLE_CLOUD_PROJECT"` and export `SPANNER_DISABLE_BUILTIN_METRICS=true` before running Python scripts to keep terminal output crisp and avoid ADC quota warnings.
 
@@ -154,15 +157,16 @@ python3 solution/pipelines/apply_postload.py
 # 5. Execute live Hero Queries (A = Exact KNN, B = CTE-isolated ScaNN ANN, C = SdlcDynamicGraph)
 python3 labs/run_hero_query.py --query B --api-id api-payments-charge-v2
 
-# 6. Render persona YAMLs, configure dual-layer IAM & Model Armor (asia-southeast1), check Antigravity MCP
+# 6. Render persona YAMLs, configure BKK Cloud Run/Secrets + dual-layer IAM + SG Model Armor & Cloud DLP (asia-southeast1), check Antigravity MCP
 python3 solution/mcp/render_persona_tools.py
 bash solution/mcp/iam_and_model_armor_setup.sh
 bash scripts/setup_antigravity_skills.sh
 bash scripts/verify_live_gcp.sh
 
-# 7. Optional Lab 8 DR backup copy to Singapore, then teardown
-bash scripts/provision_workshop_env.sh backup-to-singapore
+# 7. Clean teardown (single Bangkok instance + all workshop companion resources)
 bash scripts/provision_workshop_env.sh cleanup
+# Or full teardown across Bangkok (Spanner/Cloud Run/Secrets/GCS) + IAM + Singapore (DLP/Model Armor):
+make cleanup-all-gcp
 ```
 
 ### Verified Templates for High-Friction Lab Checkpoints (Labs 3, 6 & 8)
@@ -265,8 +269,8 @@ LIMIT 50;
 | 10 | Cloud Run MCP Toolbox returns `PERMISSION_DENIED` or fails startup on `databaseRole` | `type: spanner` rejects `databaseRole` and creates ADC sessions without a Spanner role | Remove `databaseRole` from `tools.yaml`; grant Layer 1 `sa-impact-analyst`/`sa-security-auditor` `roles/spanner.databaseReader` and `sa-adr-curator` `roles/spanner.databaseUser`; reserve `sa-fgac-*` for `database_role`-aware clients |
 | 11 | `sdlc_readonly_role` loses `SELECT` access after updating `PublicApiCatalogView` | `CREATE OR REPLACE VIEW` resets prior `GRANT SELECT ON VIEW` bindings | Re-run idempotent `solution/sql/04b_fgac_grants_rerunnable.sql` immediately after any view replacement |
 | 12 | Lab 4 `PageRank` / `EXPORT DATA` fails with parameter or schema error | Data Boost Graph Algorithms disallow `@param` (literals only) and require table-backed interleaved graph + FK | Pass literal values only, run over `SdlcAlgoGraph` (`ServiceDependsOnAlgo` interleaved in `Services` with `NOT ENFORCED` FK) |
-| 13 | `make cleanup-gcp` fails to delete `sdlc-kg-enterprise` | Existing Singapore backup copies, automatic backup schedule, or `--enable-drop-protection` | Delete all backups on the instance first, disable drop protection if enabled, then re-run `scripts/provision_workshop_env.sh cleanup` |
-| 14 | Quota exceeded creating instance in `asia-southeast3` (Bangkok) | Customer GCP project lacks `asia-southeast3` Spanner quota | Switch `.env` to `GOOGLE_CLOUD_REGION=asia-southeast1` (Singapore fallback; `100` PU × 8 hr = `$1.1257` compute) |
+| 13 | `make cleanup-gcp` fails to delete `sdlc-kg-enterprise` | Existing same-region Bangkok backups, automatic backup schedule, or `--enable-drop-protection` | Delete all backups on the Bangkok instance first, disable drop protection on each database, then re-run `scripts/provision_workshop_env.sh cleanup` |
+| 14 | Quota exceeded creating instance in `asia-southeast3` (Bangkok) | Customer GCP project lacks `asia-southeast3` Spanner processing-unit quota | Request a `regional-asia-southeast3` Spanner quota increase (`100` PU for workshop sandbox, `>= 1,000` PU for production) or switch to a pre-provisioned Bangkok workshop project |
 | 15 | Lab 8 `LOCK_STATS_TOP_HOUR` wait times look 1,000,000x too high | `SPANNER_SYS.LOCK_WAIT_DISTRIBUTION` stores durations in **microseconds**, not seconds | Divide `SPANNER_SYS.DISTRIBUTION_PERCENTILE(...)` output by `1000000.0` to display seconds |
 | 16 | DDL error `JSON derived TOKENLIST column metadata_tokens may not be STORED` | `TOKENIZE_JSON(...)` generated `TOKENLIST` columns cannot be `STORED` in Cloud Spanner | Declare `metadata_tokens TOKENLIST AS (TOKENIZE_JSON(metadata)) HIDDEN` (virtual `HIDDEN`, never `STORED HIDDEN`) |
 | 17 | SQL syntax error on multi-line `JSON '{ ... }'` in `03a_seed_synonyms_and_metadata.sql` | Single-quoted string literals cannot span multiple lines in GoogleSQL DML | Wrap multi-line JSON literals in triple quotes (`JSON '''{ ... }'''`) |
