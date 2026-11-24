@@ -454,8 +454,13 @@ def verify_lab_2(track: str, mode: str = "full") -> tuple[bool, list[str], list[
         before = len(failures)
         check_raw = raw
         if mode == "express":
-            # Track A (4h Express) scope: Tiers 1-3 (Tier 4 row-hash checksum is Track B)
-            t4_match = re.search(r"^--\s*TIER\s+4\b", raw, re.IGNORECASE | re.MULTILINE)
+            # Track A (4h Express) scope: Tiers 1-3 (Tier 4 row-hash checksum is Track B).
+            # Anchor on the section banner so we never truncate inside the top file docstring.
+            t4_match = re.search(
+                r"^-- =+\s*\n--\s*TIER\s+4\b|^-- TIER\s+4:",
+                raw,
+                re.MULTILINE,
+            )
             if t4_match:
                 check_raw = raw[: t4_match.start()]
         _assert_no_todo(check_raw, rel, failures)

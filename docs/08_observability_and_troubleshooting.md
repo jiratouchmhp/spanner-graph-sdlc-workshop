@@ -1,157 +1,140 @@
-# Module 8: Observability, Spanner Studio Visualizations, Pre-Splitting & Teardown
+# Lab 8: Observability, Spanner Studio & Clean Teardown
 
-**Customer Requirement 7 (Operational Excellence Capstone):** Master day-2 **Cloud Spanner Enterprise** operations in **Bangkok (`regional-asia-southeast3`)** — interactive **Spanner Studio** graph visualizations, `SPANNER_SYS` Query/Lock/Active-Query introspection, Execution Plan profiling, **Key Visualizer** hotspot diagnosis, **Pre-Splitting**, Emulator vs. Enterprise boundaries, production same-region Bangkok PITR/backup schedules, live verification, and guaranteed zero-residual workshop teardown.
+In this final lab, you'll complete a day-2 observability pack for your Bangkok (`regional-asia-southeast3`) Cloud Spanner Enterprise database—an interactive Spanner Studio graph query plus `SPANNER_SYS` queries for top CPU consumers, lock hotspots, and split points. After verifying all 8 labs (and optionally inspecting your live instance in Spanner Studio and running `make verify-live`), you'll run teardown as the **very last step** so every workshop resource in Bangkok (`asia-southeast3`) and Singapore (`asia-southeast1`) is deleted and billing stops cleanly.
 
-- **Duration:** Track A (4h Express): `15 min` | Track B (8h Deep-Dive): `30 min`
-- **Primary Antigravity Skills:** [`spanner-performance-observability-and-sizing`](../.agents/skills/spanner-performance-observability-and-sizing/SKILL.md), [`spanner-graph-modeling-and-gql`](../.agents/skills/spanner-graph-modeling-and-gql/SKILL.md), [`spanner-enterprise-platform-ops`](../.agents/skills/spanner-enterprise-platform-ops/SKILL.md)
-- **Support Skill:** [`sdlc-graphrag-workshop-guide`](../.agents/skills/sdlc-graphrag-workshop-guide/SKILL.md)
-- **Hands-On Starter File:** [`starter/sql/11_observability_and_studio_viz.sql`](../starter/sql/11_observability_and_studio_viz.sql) (`TODO(Lab 8)`)
-- **Reference Solution:** [`solution/sql/11_observability_and_studio_viz.sql`](../solution/sql/11_observability_and_studio_viz.sql), [`scripts/provision_workshop_env.sh`](../scripts/provision_workshop_env.sh), [`scripts/verify_live_gcp.sh`](../scripts/verify_live_gcp.sh)
+## What You'll Work On
 
----
+| Step | File to open (`starter/`) | Where to edit (`TODO` / line) | Track |
+| :-: | :--- | :--- | :-: |
+| 1 | [`starter/sql/11_observability_and_studio_viz.sql`](../starter/sql/11_observability_and_studio_viz.sql) | 4 `TODO(Lab 8)` queries (`L19`, `L32`, `L44`, `L87`): Studio graph viz, Query Insights, Lock Insights, Split Points | Track A & B |
+| 2 | Offline verification | Run `make TRACK=starter verify-lab LAB=8` and `make TRACK=starter verify-lab LAB=all` | Track A & B |
+| 3 | *(Optional — Live Bangkok GCP)* | Run `11` live, check Spanner Studio Graph / Explanation / Key Visualizer, and run `make verify-live` | Track B (Optional) |
+| 4 | *(Final Step — Clean Up GCP)* | Run the full GCP teardown **last** (in Step 4, after Step 3!) so you don't delete your database early | Live GCP Only |
 
-## 1. Spanner Studio Interactive Graph Visualization (`RETURN SAFE_TO_JSON(p)`)
-
-Spanner Studio activates the interactive **Graph** tab **only** when a GQL query returns full graph elements or paths serialized via `SAFE_TO_JSON(...)` (staying under Spanner Studio's `10 MB` result payload cap). Returning scalar columns alone renders only a tabular grid.
-
-Run Query 1A from [`solution/sql/11_observability_and_studio_viz.sql`](../solution/sql/11_observability_and_studio_viz.sql) in **Cloud Console → Spanner → `sdlc-kg-enterprise` → `sdlc_knowledge_graph` → Spanner Studio**:
-
-```sql
-GRAPH SdlcGraph
-MATCH p = TRAIL (upstream:Service)-[:DEPENDS_ON]->{0,3}(direct:Service)-[:CALLS_API]->(target:Api {api_id: 'api-payments-charge-v2'})
-RETURN
-  SAFE_TO_JSON(p) AS blast_radius_path,
-  PATH_LENGTH(p) AS hops
-ORDER BY hops ASC
-LIMIT 50;
-```
-
-- Switch to the **Graph** tab to inspect `api-payments-charge-v2`, its direct callers (`svc-checkout`, `svc-billing`), the `svc-orders <-> svc-notifications` cycle, and `svc-analytics` (`DATA_FEED`).
-- Toggle **Schema view** to inspect all 6 node labels and 14 edge labels on `SdlcGraph` visually.
+- **Estimated time:** ~15 min (Track A Express) / ~30 min (Track B Full)
+- **Reference copy (read-only if stuck):** [`solution/sql/11_observability_and_studio_viz.sql`](../solution/sql/11_observability_and_studio_viz.sql), [`scripts/verify_live_gcp.sh`](../scripts/verify_live_gcp.sh), [`scripts/verify_zero_residual.sh`](../scripts/verify_zero_residual.sh)
+- **Antigravity skills:** [`spanner-performance-observability-and-sizing`](../.agents/skills/spanner-performance-observability-and-sizing/SKILL.md), [`spanner-graph-modeling-and-gql`](../.agents/skills/spanner-graph-modeling-and-gql/SKILL.md), [`spanner-enterprise-platform-ops`](../.agents/skills/spanner-enterprise-platform-ops/SKILL.md)
 
 ---
 
-## 2. Production `SPANNER_SYS` Introspection & Critical Gotchas
+## Quick Background
 
-> **Transaction Mode Rule:** Every `SPANNER_SYS.*` introspection query **must run in a read-only transaction** (cannot execute inside a read-write transaction).
+Four practical habits save hours when running Cloud Spanner Enterprise in production:
+- **Read-only transactions for `SPANNER_SYS`:** Every `SPANNER_SYS.*` query must run in a read-only transaction (Spanner rejects them inside read-write transactions).
+- **Spanner Studio Graph tab:** Studio activates the interactive **Graph** tab only when your GQL query returns full graph elements or paths via `SAFE_TO_JSON(...)` under its `10 MB` payload cap. Returning plain scalar columns renders only a table.
+- **Execution Plans & Key Visualizer:** Check the **Explanation** tab (or `--query-mode=PROFILE`) to verify `IdxDocumentChunksEmbedding` shows `VectorIndexScan` instead of `TableScan`. In **Key Visualizer**, a bright diagonal line rising left-to-right signals a monotonic key hotspot—which is why `AgentQueryAudit` uses `GENERATE_UUID()`.
+- **Why we test live on 100-PU Bangkok Enterprise instead of the local Emulator:**
 
-| Diagnostic Area | System Table (`11_observability_and_studio_viz.sql`) | Key Signals & Production Gotchas |
+| Capability | Local Spanner Emulator | Cloud Spanner Enterprise (`regional-asia-southeast3`) |
 | :--- | :--- | :--- |
-| **Top-CPU & Misrouted RW Queries** | `SPANNER_SYS.QUERY_STATS_TOP_HOUR` | Rank by `EXECUTION_COUNT * AVG_CPU_SECONDS`. Alert when `RUN_IN_RW_TRANSACTION_EXECUTION_COUNT > 0` on read-only FTS/Graph queries or when `AVG_DISK_IO_COST` spikes from accidental HDD reads. Always attach structured `REQUEST_TAG` (e.g., `persona=impact-analyst,tool=blast_radius`). |
-| **Lock Contention Hotspots** | `SPANNER_SYS.LOCK_STATS_TOP_HOUR` | **CRITICAL UNIT TRAP:** `LOCK_WAIT_SECONDS` is in **seconds**, whereas `LOCK_WAIT_DISTRIBUTION` buckets are stored in **microseconds**! Always divide `SPANNER_SYS.DISTRIBUTION_PERCENTILE(LOCK_WAIT_DISTRIBUTION[SAFE_OFFSET(0)], 99.0)` by **`1000000.0`** to obtain seconds! |
-| **Runaway Active Queries** | `SPANNER_SYS.ACTIVE_QUERIES_SUMMARY` & `OLDEST_ACTIVE_QUERIES` | Intentionally **omit `CLIENT_IP_ADDRESS`** (selecting it adds lookup overhead). Cancel confirmed runaway queries with `CALL cancel_query('<query_id>')` (best-effort; requires `spanner.sessions.delete`). |
-| **Tiered Storage & TTL Health** | `SPANNER_SYS.TABLE_SIZES_STATS_1HOUR` & `ROW_DELETION_POLICIES` | Monitor `USED_SSD_BYTES` vs. `USED_HDD_BYTES` spill ratio on `sdlc_cold_archive` (`AgentQueryAudit.raw_payload`) and alert if `UNDELETABLE_ROWS > 0` or `PROCESSED_WATERMARK` lags `> 72h`. |
+| Basic relational DDL, DML & GQL syntax | Partial subset | Full support |
+| ScaNN Vector Index (`CREATE VECTOR INDEX`) & ANN plans | Ignored / unsupported | Full ScaNN index & auto-tuned leaves |
+| Full-Text Search (`SdlcSynonymDict`, `enhance_query`, `SCORE`) | Limited / non-parity | Full FTS, custom dictionaries & IDF scoring |
+| Vertex AI `ML.PREDICT` (`asia-southeast1`) & Data Boost Graph Algos | Unsupported | Native in-DB inference + serverless Data Boost |
+| FGAC Roles, IAM Enforcement & `SECURE_CONTEXT()` | Skipped (allows everything!) | Enforced SQL RBAC + conditional IAM |
+| `PLAN`/`PROFILE`, `SPANNER_SYS`, Key Visualizer, Locality Groups, PITR | Empty / no-op | Full insights, SSD→HDD tiering, 7-day PITR & backups |
 
 ---
 
-## 3. Execution Plans, Key Visualizer & Pre-Splitting
+## Step-by-Step Hands-On
 
-### Execution Plans (`--query-mode=PLAN|PROFILE`)
-- Use `--query-mode=PLAN` (zero data read) or `--query-mode=PROFILE` (returns actual latency, rows scanned, CPU, and `SeekableKeySize`) or open Spanner Studio's **Explanation** tab.
-- **ScaNN Check:** Confirm `IdxDocumentChunksEmbedding` appears in the plan for `APPROX_COSINE_DISTANCE ... WHERE embedding IS NOT NULL`. If you see a full `TableScan` on `DocumentChunks`, check `INV-08` (missing `WHERE embedding IS NOT NULL` or a `JOIN` inside the ANN block).
+### Step 1: Complete the 4 observability queries in `starter/sql/11_observability_and_studio_viz.sql` (Track A & B)
 
-### Key Visualizer & Pre-Splitting Before Scale Loads
-- **Key Visualizer Heatmaps:** A bright diagonal line rising left-to-right signals a **monotonic sequential primary key hotspot** (e.g., raw timestamp or auto-incrementing integer). Always use split-safe keys (`GENERATE_UUID()`, domain-prefixed hashes, or bit-reversed sequences — as in `AgentQueryAudit.audit_id DEFAULT (GENERATE_UUID())`).
-- **Pre-Splitting (`splits add`):** Before a large multi-million-row Neo4j migration into production (`>= 1,000` PU), pre-split hot edge and chunk keyspaces so Dataflow distributes writes across splits immediately instead of waiting for organic load-based splitting, then verify via `SPANNER_SYS.USER_SPLIT_POINTS`:
-  ```bash
-  # Example: pre-split DocumentChunks across doc_type prefixes before a 20M-chunk load
-  gcloud spanner databases splits add \
-    --instance=sdlc-kg-enterprise \
-    --database=sdlc_knowledge_graph \
-    --splits-file=splits.txt
-  ```
+Open [`starter/sql/11_observability_and_studio_viz.sql`](../starter/sql/11_observability_and_studio_viz.sql). Real-time active queries (`L58–L77`, intentionally omitting `CLIENT_IP_ADDRESS` to avoid lookup overhead), SSD/HDD Locality Group sizes (`L91–L102`), and TTL row-deletion monitoring (`L104–L111`) are already complete. Fill in the four `TODO(Lab 8)` sections:
 
----
+1. **Query 1 — Spanner Studio graph visualization (`L19`):** Write a `GRAPH SdlcGraph` query using `MATCH p = TRAIL (upstream:Service)-[:DEPENDS_ON]->{0,3}(direct:Service)-[:CALLS_API]->(target:Api {api_id: 'api-payments-charge-v2'})`. Return `SAFE_TO_JSON(p) AS blast_radius_path` and `PATH_LENGTH(p) AS hops`, ordered by `hops ASC` with `LIMIT 50`.
+2. **Query 2 — Hourly top CPU queries (last 6 hours) (`L32`):** Query `SPANNER_SYS.QUERY_STATS_TOP_HOUR` filtered to `INTERVAL_END >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 6 HOUR)`. Compute `ROUND(EXECUTION_COUNT * AVG_CPU_SECONDS, 4) AS total_cpu_seconds`, include `REQUEST_TAG`, `TEXT_FINGERPRINT`, `QUERY_TYPE`, `EXECUTION_COUNT`, `AVG_LATENCY_SECONDS`, `AVG_ROWS_SCANNED`, `AVG_REMOTE_SERVER_CALLS`, `AVG_DISK_IO_COST`, and `RUN_IN_RW_TRANSACTION_EXECUTION_COUNT` (flags read-only FTS/Graph queries accidentally run in read-write transactions), and order by `total_cpu_seconds DESC LIMIT 20`.
+3. **Query 3 — Hourly lock hotspots (last 6 hours) (`L44`):** Query `SPANNER_SYS.LOCK_STATS_TOP_HOUR` over the last 6 hours. Watch out for the unit mismatch: `LOCK_WAIT_SECONDS` is in **seconds**, while `LOCK_WAIT_DISTRIBUTION` buckets are in **microseconds**. Guard against empty buckets (`LOCK_WAIT_DISTRIBUTION[SAFE_OFFSET(0)].COUNT > 0`) and divide `SPANNER_SYS.DISTRIBUTION_PERCENTILE(LOCK_WAIT_DISTRIBUTION[SAFE_OFFSET(0)], 99.0)` by `1000000.0` (or `1e6`) to report `p99_lock_wait_secs` in seconds. Include `CAST(ROW_RANGE_START_KEY AS STRING)` and `SAMPLE_LOCK_REQUESTS`, ordered by `LOCK_WAIT_SECONDS DESC LIMIT 20`.
+4. **Query 5A — Split-point audit (`L87`):** Select `TABLE_NAME`, `INDEX_NAME`, `INITIATOR`, `SPLIT_KEY`, and `EXPIRE_TIME` from `SPANNER_SYS.USER_SPLIT_POINTS`, ordered by `TABLE_NAME ASC, INDEX_NAME ASC`.
 
-## 4. Cloud Spanner Emulator vs. Cloud Spanner Enterprise Feature Matrix
+*(Optional Antigravity prompt)*:
+> "Help me complete the four observability queries in `starter/sql/11_observability_and_studio_viz.sql`, including `SAFE_TO_JSON(p)` for the Spanner Studio graph view and the microsecond-to-second conversion for lock waits."
 
-Knowing exactly what the free local Emulator skips prevents wasted debugging hours:
+### Step 2: Verify Lab 8 and full workshop completion offline (Track A & B)
 
-| Feature / Capability | Local Spanner Emulator | Cloud Spanner Enterprise (`regional-asia-southeast3`) |
-| :--- | :---: | :---: |
-| Basic relational DDL, DML, Transactions & GQL syntax | Supported (subset) | **Full Production Support** |
-| **ScaNN Vector Index (`CREATE VECTOR INDEX`) & ANN Plan** | Unsupported / ignored | **Full ScaNN ANN Index + Auto-Tuned Leaves** |
-| **Full-Text Search (`SdlcSynonymDict`, `enhance_query`, `SCORE`)** | Limited / non-parity | **Full FTS + Custom Dictionaries + IDF Scoring** |
-| **Vertex AI `CREATE MODEL` / `ML.PREDICT` (`asia-southeast1`)** | Unsupported | **Native In-DB Inference + Throttled PDML** |
-| **Data Boost Graph Algorithms (`PageRank`, `WCC`, `ShortestPath`)** | Unsupported | **Serverless Isolated Data Boost Execution** |
-| **FGAC Roles, IAM Enforcement & `SECURE_CONTEXT()`** | **Skipped (all queries allowed!)** | **Strict Enforced SQL RBAC + Conditional IAM** |
-| **`PLAN` / `PROFILE` Stats, `ANALYZE`, `SPANNER_SYS`, Key Visualizer** | Empty / no-op | **Full Optimizer Stats, Insights & Heatmaps** |
-| **Locality Groups (SSD→HDD), TTL Sweeper, PITR & Backups** | No-op | **Full Tiering, 7-Day PITR & Same-Region Bangkok Backups** |
-
----
-
-## 5. Production Same-Region Bangkok PITR/Backups, Live Verification & Guaranteed Zero-Residual Teardown
-
-### Step 1: Production Same-Region Bangkok PITR & Backup Schedules (Overview — Single-Region Only)
-
-In this strict Bangkok single-region architecture (**no** 2-region Singapore Spanner DR instance), production instances (`>= 1,000` PU in `regional-asia-southeast3`) combine **3-zone synchronous quorum** (`99.99%` SLA) with two built-in same-region data protection controls — keeping 100% of backups Thailand PDPA resident with **`$0` cross-region egress**:
-
-- **7-Day Point-in-Time Recovery (PITR):** Configure `version_retention_period` up to `7d` so operators can execute stale reads (`AS OF SYSTEM TIME`) or recover accidentally overwritten rows directly inside Bangkok:
-  ```sql
-  ALTER DATABASE sdlc_knowledge_graph
-  SET OPTIONS (version_retention_period = '7d');
-  ```
-- **Same-Region Bangkok `AUTOMATIC` Backup Schedules:** Production instances keep `--default-backup-schedule-type=AUTOMATIC` (`$0.0315/GiB-mo` in `regional-asia-southeast3`) and `--enable-drop-protection`. *(Our `100` PU workshop sandbox uses `--default-backup-schedule-type=NONE` specifically so teardown completes in seconds.)*
-- **Restore Reminder:** Cloud Spanner backups preserve SQL FGAC roles and `GRANT` statements inside the schema, but do **not** include GCP IAM bindings — always re-apply Step 3 of `solution/mcp/iam_and_model_armor_setup.sh` after restoring a database in Bangkok.
-
-### Step 2: Live Verification (`verify_live_gcp.sh`) & Guaranteed Zero-Residual Teardown (`make cleanup-all-gcp`)
-
-First run the live Bangkok verification suite to confirm every layer is healthy end-to-end:
+Run the offline verifier for Lab 8, then check your full workshop progress across all 8 labs (and validate the 8 Antigravity skills):
 
 ```bash
-# Preview checks safely first, then run live against your Bangkok sandbox
-make verify-live DRY_RUN=1
-make verify-live
+# Verify Lab 8
+make TRACK=starter verify-lab LAB=8
+
+# Verify all 8 labs (Track B Full)
+make TRACK=starter verify-lab LAB=all
+
+# Or if you followed Track A (4-Hour Express):
+make TRACK=starter MODE=express verify-lab LAB=all
+
+# Confirm all 8 Antigravity skills & .antigravity/mcp_config.json pass
+make validate-skills
 ```
 
-`scripts/verify_live_gcp.sh` verifies: (1) DDL describe (`SdlcGraph`, `DocumentChunks`, `IdxDocumentChunksEmbedding`, `SdlcSynonymDict`, `PublicApiCatalogView`), (2) ScaNN `PLAN` (`VectorIndexScan`), (3) live Hero Query B 7-row fixture parity, and (4) `sdlc_readonly_role` ALLOW on `PublicApiCatalogView` and DENY on `Owners.clearance_tier` / `INSERT INTO Adrs`.
+### Step 3 (Optional — Live Bangkok GCP): Inspect queries in Spanner Studio & run `make verify-live`
 
-Once verification passes, run guaranteed zero-residual teardown (**confirm active project first!**):
+Do this step **before** Step 4 while your Bangkok (`asia-southeast3`) sandbox is still running.
+
+1. **Execute your Lab 8 observability queries live** (if short on time, swap `--track starter` for `--track solution`):
+   ```bash
+   python3 scripts/run_live_sql.py 11 --track starter
+   ```
+2. **Explore in Cloud Console Spanner Studio** (**Spanner → `sdlc-kg-enterprise` → `sdlc_knowledge_graph` → Spanner Studio**):
+   - Paste Query 1 (`RETURN SAFE_TO_JSON(p) ... LIMIT 50`) and open the **Graph** tab to inspect `api-payments-charge-v2`, direct callers, and the `svc-orders <-> svc-notifications` cycle. Toggle **Schema view** to browse all 6 node labels and 14 edge labels.
+   - Run your Lab 5 Hero query and open the **Explanation** tab to confirm `VectorIndexScan` on `IdxDocumentChunksEmbedding`.
+   - Open **Key Visualizer** to inspect key-range heatmaps. Before a large multi-million-row production load (`>= 1,000` PU), you can pre-split hot prefixes and audit them with your Query 5A:
+     ```bash
+     gcloud spanner databases splits add \
+       --instance=sdlc-kg-enterprise \
+       --database=sdlc_knowledge_graph \
+       --splits-file=splits.txt
+     ```
+   - *(Production backup reminder: production instances in `regional-asia-southeast3` enable `--default-backup-schedule-type=AUTOMATIC`, `--enable-drop-protection`, and `ALTER DATABASE sdlc_knowledge_graph SET OPTIONS (version_retention_period = '7d')`—keeping 100% of backups in Bangkok with `$0.00/mo` cross-region egress. Backups include SQL FGAC roles/grants, but GCP IAM bindings must be re-applied after a restore.)*
+3. **Run the end-to-end live verification suite:**
+   ```bash
+   make verify-live DRY_RUN=1
+   make verify-live
+   ```
+   `scripts/verify_live_gcp.sh` confirms DDL objects, ScaNN `VectorIndexScan` plans, live Hero Query B 7-row fixture parity, `sdlc_readonly_role` allow/deny checks, Bangkok instance residency, and Singapore (`asia-southeast1`) Vertex AI model bindings.
+
+### Step 4 (Final Step — Clean Up GCP Resources): Delete everything so billing stops
+
+Run teardown **only after you're done with Step 3**. Always check your active GCP project first so you only delete your workshop sandbox:
 
 ```bash
-# Confirm you are deleting ONLY your workshop sandbox project!
+# 1. Confirm your active project is your workshop sandbox!
 gcloud config get-value project
 
-# Full teardown (~2 min): removes Bangkok Cloud Run MCP, user-managed Secrets, all 7 SAs,
-# GCS staging bucket, Bangkok Spanner instance/same-region backups, plus Singapore (asia-southeast1)
-# companion DLP/Model Armor templates — then runs verify_zero_residual.sh!
+# 2. Full teardown (~2 min): deletes Bangkok (asia-southeast3) Spanner instance/backups,
+#    Cloud Run MCP services, user-managed Secrets, GCS staging bucket, all 7 SAs,
+#    and Singapore (asia-southeast1) DLP & Model Armor templates — then runs
+#    scripts/verify_zero_residual.sh to confirm 0 leftover resources
 make cleanup-all-gcp
 
-# Or Spanner-only teardown (Bangkok instance & same-region backups):
+# Or, if you only provisioned Cloud Spanner (skipped Lab 6 Cloud Run & Model Armor):
 make cleanup-gcp
 
-# Preview or re-run the 6-category zero-residual audit anytime:
-bash scripts/verify_zero_residual.sh --dry-run
-
-# Confirm zero Spanner instances remain
+# 3. Confirm zero Spanner instances remain
 gcloud spanner instances list
 ```
-> **Clean CLI Tip:** Set `gcloud auth application-default set-quota-project "${GOOGLE_CLOUD_PROJECT}"` and `export SPANNER_DISABLE_BUILTIN_METRICS=true` in live shells to silence ADC quota warnings and OpenTelemetry client metrics noise. `make cleanup-all-gcp` finishes by running `scripts/verify_zero_residual.sh` across all 6 GCP resource categories (handling `gcloud run services delete` 404 `could not be found` idempotently) so zero billable resources remain.
+
+You can preview or re-run the 6-category zero-residual check anytime with `bash scripts/verify_zero_residual.sh --dry-run`.
 
 ---
 
-## 6. Hands-On Exercise — Lab 8 (`starter/`)
-
-Open [`starter/sql/11_observability_and_studio_viz.sql`](../starter/sql/11_observability_and_studio_viz.sql) and complete the `TODO(Lab 8)` queries:
-1. **Spanner Studio Interactive Path Query:** `GRAPH SdlcGraph MATCH p = TRAIL ... RETURN SAFE_TO_JSON(p) AS blast_radius_path, PATH_LENGTH(p) AS hops LIMIT 50`.
-2. **Query Insights:** Top-CPU query against `SPANNER_SYS.QUERY_STATS_TOP_HOUR` exposing `RUN_IN_RW_TRANSACTION_EXECUTION_COUNT` and `AVG_DISK_IO_COST`.
-3. **Lock Insights:** P99 lock wait query against `SPANNER_SYS.LOCK_STATS_TOP_HOUR` converting microseconds to seconds (`/ 1000000.0` or `/ 1e6`).
-4. **Split-Point & Lifecycle Health:** Query `SPANNER_SYS.USER_SPLIT_POINTS`, `TABLE_SIZES_STATS_1HOUR`, and `ROW_DELETION_POLICIES`.
-
-### Antigravity IDE Prompt (Copy-Paste)
-
-> *"Using the `spanner-performance-observability-and-sizing`, `spanner-graph-modeling-and-gql`, and `spanner-enterprise-platform-ops` skills, help me complete `TODO(Lab 8)` in `starter/sql/11_observability_and_studio_viz.sql`, including `RETURN SAFE_TO_JSON(p)`, `SPANNER_SYS.QUERY_STATS_TOP_HOUR`, `SPANNER_SYS.LOCK_STATS_TOP_HOUR` (converting microseconds via `/ 1000000.0`), and `SPANNER_SYS.USER_SPLIT_POINTS`. Do not edit `solution/`."*
-
-### Verify Lab 8 & Full Workshop Completion Offline
+## Verify This Lab
 
 ```bash
 make TRACK=starter verify-lab LAB=8
 make TRACK=starter verify-lab LAB=all
-make validate-skills
 ```
 
-**Checkpoint Expected Output:** `[PASS] Lab 8 (starter/)` — Congratulations on completing all 8 modules of the Cloud Spanner Enterprise SDLC Knowledge Graph & GraphRAG Workshop!
+*(For Track A Express, run `make TRACK=starter MODE=express verify-lab LAB=all`.)*
+
+**Passing output:** `[PASS] Lab 8 (starter/, mode=full)` (and `[OK] Verified 8/8 lab(s)` across all labs).
+
+**If it fails, check:**
+- Any remaining `TODO(Lab 8)` comments in `starter/sql/11_observability_and_studio_viz.sql`.
+- Missing `SAFE_TO_JSON(...)`, `SPANNER_SYS.QUERY_STATS_TOP_HOUR`, `SPANNER_SYS.LOCK_STATS_TOP_HOUR`, or `SPANNER_SYS.USER_SPLIT_POINTS`.
+- Forgot to divide the microsecond lock wait percentile by `1000000.0` (or `1e6`) in Query 3.
 
 ---
 
-**Navigation:** [← Module 7: Enterprise Sizing & Cost TCO](07_sizing_and_cost_tco.md) | [README](../README.md) | [Facilitator Guide](00_facilitator_guide.md)
+**Previous / Next:** [← Lab 7: Sizing & Cost TCO](07_sizing_and_cost_tco.md) | [Starter Guide](../starter/README.md) | [Workshop README](../README.md) | [Facilitator Guide](00_facilitator_guide.md)

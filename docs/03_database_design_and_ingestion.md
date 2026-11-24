@@ -1,133 +1,150 @@
-# Module 3: Production Schema Design, Post-Load Indexes & Ingestion
+# Lab 3: Database Schema Design, Post-Load Indexes & Ingestion
 
-**Customer Requirement 3:** Design a split-safe, multi-model **Cloud Spanner Enterprise** schema enforcing all structural graph invariants (`INV-01`–`INV-09`), compare schematized vs. schemaless (`DYNAMIC LABEL`) graph layouts, load Path A and Path B data without hitting Spanner's mutation or index-backfill traps, and apply post-load covering, FTS, and ScaNN vector indexes.
+In this lab, you'll complete the Cloud Spanner Enterprise schema and property graph DDL, define post-load covering, full-text, and ScaNN vector indexes, and (on Track B) implement both the Path A and Path B ingestion pipelines. Finish your `starter/` edits first (Steps 1–4), then optionally deploy and load your own schema into Bangkok (`asia-southeast3`) in Step 5.
 
-- **Duration:** Track A (4h Express): `45 min` | Track B (8h Deep-Dive): `90 min`
-- **Primary Antigravity Skills:** [`spanner-schema-and-data-modeling`](../.agents/skills/spanner-schema-and-data-modeling/SKILL.md), [`spanner-graph-modeling-and-gql`](../.agents/skills/spanner-graph-modeling-and-gql/SKILL.md)
-- **Support Skills:** [`spanner-enterprise-platform-ops`](../.agents/skills/spanner-enterprise-platform-ops/SKILL.md), [`spanner-search-ai-and-graphrag`](../.agents/skills/spanner-search-ai-and-graphrag/SKILL.md), [`spanner-migration-and-neo4j-playbook`](../.agents/skills/spanner-migration-and-neo4j-playbook/SKILL.md)
-- **Hands-On Starter Files (`4` files with `TODO(Lab 3)`):**
-  1. [`starter/sql/01_path_a_schematized.sql`](../starter/sql/01_path_a_schematized.sql)
-  2. [`starter/sql/03_indexes_fts_vector_postload.sql`](../starter/sql/03_indexes_fts_vector_postload.sql)
-  3. [`starter/pipelines/neo4j_to_spanner_loader.py`](../starter/pipelines/neo4j_to_spanner_loader.py)
-  4. [`starter/pipelines/unstructured_graphrag_ingest.py`](../starter/pipelines/unstructured_graphrag_ingest.py)
-- **Reference Solution:** `solution/sql/{01,02,03,03a,03b,03c,03d}*`, `solution/pipelines/{neo4j_to_spanner_loader.py,dataflow_migration.sh,unstructured_graphrag_ingest.py,apply_postload.py}`
+## What You'll Work On
 
----
+| Step | File to open (`starter/`) | Where to edit (`TODO` / line) | Track |
+| :-: | :--- | :--- | :-: |
+| 1 | [`starter/sql/01_path_a_schematized.sql`](../starter/sql/01_path_a_schematized.sql) | `ServiceCallsApi` (`L213`), `ServiceDependsOnService` (`L278`), `ChunkCitesApiView` (`L308`), `SdlcGraph` (`L348`) | Track A & B |
+| 2 | [`starter/sql/03_indexes_fts_vector_postload.sql`](../starter/sql/03_indexes_fts_vector_postload.sql) | `IdxApiCalledByService` (`L25`), `IdxDocumentChunksSearch` (`L129`), `IdxDocumentChunksEmbedding` (`L140`) | Track A & B |
+| 3 | [`starter/pipelines/neo4j_to_spanner_loader.py`](../starter/pipelines/neo4j_to_spanner_loader.py) | `load_graph()` (`L377`, `TODO` at `L389`, stub `L439`) | Track B |
+| 4 | [`starter/pipelines/unstructured_graphrag_ingest.py`](../starter/pipelines/unstructured_graphrag_ingest.py) | `extract_chunks_and_mentions()` (`L224`, `TODO` at `L233`, stub `L268`) | Track B |
+| 5 | Live Bangkok GCP deploy & load | `provision_workshop_env.sh`, loaders, `apply-postload` | Optional (Live GCP) |
 
-## 1. Core Schema Engineering Decisions (`01_path_a_schematized.sql`)
-
-### A. Interleaving & The Dual-Cascade Trap (`INV-06`)
-In Cloud Spanner Graph, interleaving outgoing edges under their source node table physically co-locates adjacency lists on the same split — turning forward hops into local disk reads:
-- **Heterogeneous Edges (Source != Destination):** `ServiceCallsApi` (`Services -> Apis`), `AdrGovernsApi` (`Adrs -> Apis`), `ReqAppliesToApi`, `ReqAppliesToService`, and `ChunkEntityMentions` legally combine `INTERLEAVE IN PARENT <Source> ON DELETE CASCADE` with a destination `FOREIGN KEY ... ON DELETE CASCADE`.
-- **Self-Referential Edges (Source == Destination — `INV-06`):** Cloud Spanner **forbids** combining `INTERLEAVE IN PARENT T ON DELETE CASCADE` with a self-referencing cascading `FOREIGN KEY REFERENCES T ON DELETE CASCADE` on the same table! Therefore:
-  - `ServiceDependsOnService` (`Services -> Services`) and `AdrSupersedesAdr` (`Adrs -> Adrs`) are **standalone tables with two enforced cascading FKs**.
-  - For Lab 4 Data Boost Graph Algorithms (`08_graph_algorithms_criticality.sql`), `ServiceDependsOnAlgo` satisfies Spanner's algorithm interleaving requirement via `INTERLEAVE IN PARENT Services ON DELETE CASCADE` + a **`NOT ENFORCED`** destination FK!
-
-### B. Dual-Projected N:1 Edges (`INV-02`–`INV-04`)
-Instead of creating 4 extra junction tables for `EXPOSES`, `OWNS_SERVICE`, `OWNS_ADR`, and `OWNS_REQ` (`60` edges), we project the existing FK columns on `Apis`, `Services`, `Adrs`, and `Requirements` directly in `CREATE OR REPLACE PROPERTY GRAPH SdlcGraph` using **unique `AS` aliases** (`Apis AS ExposesApi`, `Services AS TeamOwnsService`, `Adrs AS TeamOwnsAdr`, `Requirements AS TeamOwnsReq`). Note that folded N:1 FKs omit `ON DELETE CASCADE` so removing a team record never cascades away production microservices.
-
-### C. Path B Bridge Views (`INV-05`), Locality Groups & Custom Dictionary
-- **Pattern-1 Citation Views:** `ChunkCitesApiView`, `ChunkCitesServiceView`, `ChunkCitesAdrView`, and `ChunkCitesReqView` declare explicit `SQL SECURITY INVOKER` and project the single-table primary key `(chunk_id, entity_type, entity_id)` with explicit `KEY (...)` clauses in `SdlcGraph`.
-- **Vector Embeddings (`INV-08`):** `DocumentChunks.embedding` uses `ARRAY<FLOAT32>(vector_length=>768)` (`3.0 KiB/vector` — half the footprint of `FLOAT64` and required for optimal ScaNN memory efficiency).
-- **Tiered Storage & TTL:** `CREATE LOCALITY GROUP sdlc_cold_archive OPTIONS (storage = 'ssd', ssd_to_hdd_spill_timespan = '30d')` applies **only** to the cold `AgentQueryAudit.raw_payload` JSON column (keeping row-existence metadata and PK checks on SSD!), paired with `ROW DELETION POLICY (OLDER_THAN(created_at, INTERVAL 90 DAY))` — delivering **5x storage savings** (`$0.315` → `$0.063/GiB-mo` in Bangkok).
-- **Custom FTS Dictionary & Virtual `TOKENIZE_JSON`:** `SdlcSynonymDict` uses the exact required 2-column schema (`Key STRING(MAX)`, `Value ARRAY<STRING(MAX)>`) with `fulltext_dictionary_table = true, fulltext_dictionary_staleness = '15s'`. **Live DDL Gotcha:** `Apis.metadata_tokens` (`TOKENIZE_JSON(metadata)`) **must** be declared virtual `HIDDEN` (never `STORED HIDDEN` — Cloud Spanner rejects `JSON derived TOKENLIST column ... may not be STORED`), and multi-line JSON DML literals in `03a_seed_synonyms_and_metadata.sql` must use triple quotes (`JSON '''{ ... }'''`).
+- **Estimated time:** ~45 min (Track A Express) / ~90 min (Track B Full)
+- **Reference copies (read-only if stuck):** [`01_path_a_schematized.sql`](../solution/sql/01_path_a_schematized.sql), [`03_indexes_fts_vector_postload.sql`](../solution/sql/03_indexes_fts_vector_postload.sql), [`neo4j_to_spanner_loader.py`](../solution/pipelines/neo4j_to_spanner_loader.py), [`unstructured_graphrag_ingest.py`](../solution/pipelines/unstructured_graphrag_ingest.py)
+- **Antigravity skills:** [`spanner-schema-and-data-modeling`](../.agents/skills/spanner-schema-and-data-modeling/SKILL.md), [`spanner-graph-modeling-and-gql`](../.agents/skills/spanner-graph-modeling-and-gql/SKILL.md) (support: [`spanner-enterprise-platform-ops`](../.agents/skills/spanner-enterprise-platform-ops/SKILL.md), [`spanner-search-ai-and-graphrag`](../.agents/skills/spanner-search-ai-and-graphrag/SKILL.md), [`spanner-migration-and-neo4j-playbook`](../.agents/skills/spanner-migration-and-neo4j-playbook/SKILL.md))
 
 ---
 
-## 2. Schematized (`SdlcGraph`) vs. Schemaless Comparison (`SdlcDynamicGraph`)
+## Quick Background
 
-Inspect [`solution/sql/02_path_b_schemaless_comparison.sql`](../solution/sql/02_path_b_schemaless_comparison.sql) to compare Cloud Spanner's flexible `DYNAMIC LABEL` / `DYNAMIC PROPERTIES` model (`INV-07`):
+**Typed vs. schemaless graphs:** Our primary schema (`SdlcGraph`) uses typed tables so we get enforced foreign keys, covering reverse indexes, full-text search, and ScaNN vector search. If you want to compare Spanner's flexible `DYNAMIC LABEL` / `DYNAMIC PROPERTIES` layout, inspect [`solution/sql/02_path_b_schemaless_comparison.sql`](../solution/sql/02_path_b_schemaless_comparison.sql) — Spanner requires dynamic-label tables to live in their own separate property graph (`SdlcDynamicGraph`, `INV-07`).
 
-| Aspect | Schematized (`SdlcGraph`) | Schemaless (`SdlcDynamicGraph`) |
-| :--- | :--- | :--- |
-| **Tables** | 6 typed node tables + 6 explicit edge tables + 4 views | 2 generic tables: `GraphNode` + interleaved `GraphEdge` (`Id, dest_id, edge_id`) |
-| **Graph Isolation (`INV-07`)** | Static labels/columns only | Must live in its **own separate** `CREATE PROPERTY GRAPH` (cannot mix static & `DYNAMIC LABEL`) |
-| **Case Sensitivity Guard** | Standard SQL identifiers | Stored dynamic label strings & depth-1 JSON keys **must be lowercase** (enforced via `CHECK` constraints) |
-| **JSON Cleanliness** | Typed columns | `PROPERTIES ALL COLUMNS EXCEPT (properties)` prevents double-nested JSON in `SAFE_TO_JSON(n)` |
-| **When to Use** | Core enterprise SDLC entities with strong SLAs, FKs, FTS, & ScaNN | Rapidly evolving, user-defined or heterogeneous external metadata graphs |
+**Why load data *before* creating indexes:** Never build secondary, full-text, or ScaNN vector indexes on empty tables. Bulk-load all nodes, edges, chunks, and embeddings first, then apply `03_indexes_fts_vector_postload.sql` so ScaNN trains its k-means centroids on real vectors and index backfills complete in one pass.
+
+**What `apply-postload` automates for you:** When you run post-load in Step 5, [`solution/pipelines/apply_postload.py`](../solution/pipelines/apply_postload.py) executes [`03a_seed_synonyms_and_metadata.sql`](../solution/sql/03a_seed_synonyms_and_metadata.sql) (populates `SdlcSynonymDict` and `Apis.metadata`), [`03b_remote_models.sql.tmpl`](../solution/sql/03b_remote_models.sql.tmpl) (registers `gemini-embedding-001` in Singapore `asia-southeast1` — never `global`, per `INV-09`), batches your 20 index DDL statements into 10-statement LROs, and runs `ANALYZE`. Optional [`03d_backfill_embeddings_pdml.sql`](../solution/sql/03d_backfill_embeddings_pdml.sql) shows throttled in-DB Partitioned DML embedding backfill if you ever load chunks with `--skip-embeddings`.
 
 ---
 
-## 3. Strict Ingestion & 4-Stage Post-Load Lifecycle
+## Step-by-Step Hands-On
 
-> **Golden Rule of Bulk Loading:** **Never** create secondary indexes, `SEARCH INDEX`, or ScaNN `VECTOR INDEX` on an empty table before bulk loading! Creating `IdxDocumentChunksEmbedding` *after* loading lets ScaNN train k-means centroids over real embeddings and keeps DDL LRO backfills fast.
+### Step 1: Complete the schema and `SdlcGraph` in `starter/sql/01_path_a_schematized.sql` (Track A & B)
 
-```text
-Step 1: Base DDL (01_path_a_schematized.sql) — tables, FKs, views, SdlcGraph (ZERO secondary/FTS/ScaNN indexes)
-Step 2: Path A Load — Nodes FIRST (Owners -> Services -> Apis -> Adrs -> Requirements), Edges SECOND (< 80k mutations/commit)
-Step 3: Path B Load — Chunk 45 Markdown docs (152 chunks), extract 1,160 mentions, embed via Vertex AI asia-southeast1 (768-dim FLOAT32)
-Step 4: Post-Load Orchestrator (`apply_postload.py`):
-        Stage 1: 03a_seed_synonyms_and_metadata.sql (8 DML statements: SdlcSynonymDict + Apis.metadata JSON)
-        Stage 2: 03b_remote_models.sql.tmpl (CREATE MODEL SdlcTextEmbedding in asia-southeast1; NEVER global!)
-                 [Optional: 03c reranker + 03d throttled PDML SAFE.ML.PREDICT backfill for any NULL embeddings]
-        Stage 3: 03_indexes_fts_vector_postload.sql (20 DDL statements batched into 2x10 LRO batches — respects Spanner's 10-backfill-per-batch cap!)
-        Stage 4: ANALYZE DDL LRO (refreshes Query Optimizer statistics)
-```
+Open [`starter/sql/01_path_a_schematized.sql`](../starter/sql/01_path_a_schematized.sql). The 5 node tables, `DocumentChunks` (`ARRAY<FLOAT32>(vector_length=>768)`, `INV-08`), `AgentQueryAudit` (with `sdlc_cold_archive` SSD-to-HDD locality group and 90-day TTL), and `SdlcSynonymDict` are already provided.
 
-### Key Post-Load Index Patterns (`03_indexes_fts_vector_postload.sql`) & Live Bangkok Timings
-- **Remote Reverse Covering Indexes (Verified Live):** `CREATE INDEX IdxApiCalledByService ON ServiceCallsApi (api_id, service_id) STORING (call_mode, is_critical, migration_status, rps_estimate), INTERLEAVE IN Apis;` — non-parent `INTERLEAVE IN Apis` (without `PARENT`) co-locates incoming `CALLS_API` edges directly on the destination `Api` split! Never repeat PK columns inside `STORING`.
-- **Multi-Modal Search Indexes:** `CREATE SEARCH INDEX IdxApisSearch ON Apis (search_tokens, path_ngrams, path_lower_ngrams, metadata_tokens, latency_tokens) STORING (...)` — all `TOKENLIST` columns queried together must reside in the same search index.
-- **ScaNN Vector Index (`INV-08`) & `ML.PREDICT` Matryoshka Sizing:**
-  ```sql
-  CREATE VECTOR INDEX IdxDocumentChunksEmbedding
-    ON DocumentChunks (embedding)
-    STORING (doc_type, entity_id, source_path, section_heading)
-    WHERE embedding IS NOT NULL
-    OPTIONS (distance_type = 'COSINE');
-  ```
-  Omit manual `tree_depth`/`num_leaves` so Cloud Spanner Enterprise auto-tunes ScaNN partitions, and keep `STORING` compact (never store huge `content` blobs inside the vector index). In `03d_backfill_embeddings_pdml.sql`, always pass `STRUCT(768 AS outputDimensionality)` as the 3rd argument to `SAFE.ML.PREDICT` (otherwise `gemini-embedding-001` defaults to `3072` dimensions).
-- **Live-Verified Bangkok (`100` PU) Timings:** Base DDL create **~2 min**, Path A + `SdlcDynamicGraph` load **<5s** (`domain_key = node_id`, no label prefix, so Hero Query C matches `@api_id`), Path B + 152 Singapore Vertex AI embeddings **~22s**, and 4-stage `apply-postload` (20 indexes + 5 FTS + ScaNN + `ANALYZE`) **~10 min** (*tip: kick off `apply-postload` right before the morning break, or temporarily use `300` PU during live demos*).
+1. **`ServiceCallsApi` (`L213`):**
+   Add the `Services -> Apis` edge table with `PRIMARY KEY (service_id, api_id)`, `INTERLEAVE IN PARENT Services ON DELETE CASCADE`, and a cascading FK `fk_service_calls_api_dest` referencing `Apis (api_id)`. Interleaving under `Services` co-locates outgoing calls on the parent service's split and works cleanly because source (`Services`) != destination (`Apis`).
+2. **`ServiceDependsOnService` (`L278`):**
+   Add the `Services -> Services` edge table as a **standalone** table with `PRIMARY KEY (from_service_id, to_service_id)` and two cascading FKs (`fk_svc_dep_from` and `fk_svc_dep_to`). Here's why: Spanner won't let you put `ON DELETE CASCADE` on both `INTERLEAVE IN PARENT` and a self-referencing foreign key on the same table (`INV-06`).
+3. **`ChunkCitesApiView` (`L308`):**
+   Create the bridge view over `ChunkEntityMentions` filtered to `entity_type = 'API'`, declaring explicit `SQL SECURITY INVOKER` (`INV-05`).
+4. **`CREATE OR REPLACE PROPERTY GRAPH SdlcGraph` (`L348`):**
+   Unite all 6 node tables and 14 edge definitions:
+   - 6 explicit M:N edge tables (`ServiceCallsApi`, `ServiceDependsOnService`, `AdrGovernsApi`, `AdrSupersedesAdr`, `ReqAppliesToApi`, `ReqAppliesToService`)
+   - 4 dual-projected folded FK edges using unique `AS` aliases (`Apis AS ExposesApi`, `Services AS TeamOwnsService`, `Adrs AS TeamOwnsAdr`, `Requirements AS TeamOwnsReq`) matching exact PK arity and property types (`INV-02`, `INV-03`, `INV-04`)
+   - 4 view-backed Path B citation edges (`ChunkCitesApiView`, `ChunkCitesServiceView`, `ChunkCitesAdrView`, `ChunkCitesReqView`) with explicit `KEY (chunk_id, entity_type, entity_id)` (`INV-05`)
 
-### Running Pipelines Offline (`--dry-run`) and Live (Bangkok Spanner + Singapore Companion Vertex AI)
+*(Optional Antigravity prompt)*:
+> "Help me complete the four `TODO(Lab 3)` blocks in `starter/sql/01_path_a_schematized.sql` using `spanner-schema-and-data-modeling` and `spanner-graph-modeling-and-gql`. Keep `ServiceDependsOnService` standalone to avoid the dual-cascade error (`INV-06`), add `SQL SECURITY INVOKER` on `ChunkCitesApiView`, and wire all 6 node tables and 14 edges into `SdlcGraph`."
 
-All Cloud Spanner Enterprise tables, Cloud Storage staging buckets, and Dataflow pipelines stay strictly in **Bangkok (`asia-southeast3`)**; **Singapore (`asia-southeast1`, `~25 ms` RTT)** is called **only** for Vertex AI `gemini-embedding-001` (unavailable in Bangkok):
+### Step 2: Add post-load indexes in `starter/sql/03_indexes_fts_vector_postload.sql` (Track A & B)
+
+Open [`starter/sql/03_indexes_fts_vector_postload.sql`](../starter/sql/03_indexes_fts_vector_postload.sql).
+
+1. **`IdxApiCalledByService` (`L25`):**
+   Create a reverse covering index on `ServiceCallsApi (api_id, service_id)` with `STORING (call_mode, is_critical, migration_status, rps_estimate)` and `INTERLEAVE IN Apis` (without `PARENT`). That places inbound callers on the target API's split so blast-radius queries avoid full table scans. Don't repeat PK columns inside `STORING`.
+2. **`IdxDocumentChunksSearch` (`L129`):**
+   Create a `SEARCH INDEX` on `DocumentChunks (content_tokens, content_ngrams)` with `STORING (doc_type, entity_id, source_path, section_heading, content)` so full-text `SNIPPET(...)` and fuzzy trigram queries share one index with zero base-table lookups.
+3. **`IdxDocumentChunksEmbedding` (`L140`):**
+   Create a ScaNN `VECTOR INDEX` on `DocumentChunks (embedding)` storing compact metadata only (`STORING (doc_type, entity_id, source_path, section_heading)` — omit the large `content` text), add the mandatory partial-index filter `WHERE embedding IS NOT NULL` (`INV-08`), and set `OPTIONS (distance_type = 'COSINE')`. Omit manual `tree_depth` and `num_leaves` so Cloud Spanner Enterprise auto-tunes ScaNN partitions.
+
+*(Optional Antigravity prompt)*:
+> "Complete the three `TODO(Lab 3)` index statements in `starter/sql/03_indexes_fts_vector_postload.sql` (`IdxApiCalledByService`, `IdxDocumentChunksSearch`, and `IdxDocumentChunksEmbedding` with `WHERE embedding IS NOT NULL`)."
+
+Quick check (Track A Express — checks both SQL files):
 
 ```bash
-# Offline zero-dependency validation of all Path A/B loaders + 4-stage post-load
-make dry-run-pipelines
-
-# Optional Track B Dataflow bulk-load dry-run (GCS_Text_to_Cloud_Spanner in asia-southeast3)
-bash solution/pipelines/dataflow_migration.sh --dry-run
-
-# Live execution against your Bangkok sandbox (after `make provision-gcp`)
-python3 solution/pipelines/neo4j_to_spanner_loader.py
-python3 solution/pipelines/unstructured_graphrag_ingest.py
-bash scripts/provision_workshop_env.sh apply-postload
-
-# Optional: demonstrate throttled PDML in-DB embedding backfill (if loaded with --skip-embeddings)
-gcloud spanner databases execute-sql sdlc_knowledge_graph \
-  --instance=sdlc-kg-enterprise \
-  --enable-partitioned-dml \
-  --sql="$(cat solution/sql/03d_backfill_embeddings_pdml.sql)"
-```
-
----
-
-## 4. Hands-On Exercises — Lab 3 (`starter/`)
-
-Complete the `TODO(Lab 3)` blocks across all **4 starter files**:
-
-1. **`starter/sql/01_path_a_schematized.sql`**: Add `ServiceCallsApi` (`INTERLEAVE IN PARENT Services ON DELETE CASCADE` + destination FK), standalone dual-FK `ServiceDependsOnService` (respecting `INV-06`), `ChunkCitesApiView` (`SQL SECURITY INVOKER`), and `CREATE OR REPLACE PROPERTY GRAPH SdlcGraph`.
-2. **`starter/sql/03_indexes_fts_vector_postload.sql`**: Create `IdxApiCalledByService` (`STORING (...)`, `INTERLEAVE IN Apis`), `CREATE SEARCH INDEX IdxDocumentChunksSearch`, and `CREATE VECTOR INDEX IdxDocumentChunksEmbedding ... WHERE embedding IS NOT NULL`.
-3. **`starter/pipelines/neo4j_to_spanner_loader.py`**: Implement `load_graph()` with nodes-before-edges ordering and `500`-row batching strictly under Spanner's `80,000` mutations/commit ceiling (with zero-dependency `--dry-run` support).
-4. **`starter/pipelines/unstructured_graphrag_ingest.py`**: Implement `extract_chunks_and_mentions()` to chunk the 45 Markdown docs, extract `api-*`, `svc-*`, `ADR-*`, `REQ-*`, and `team-*` mentions, and enforce regional `asia-southeast1` Vertex AI validation (`INV-09`).
-
-### Antigravity IDE Prompt (Copy-Paste)
-
-> *"Using the `spanner-schema-and-data-modeling` and `spanner-graph-modeling-and-gql` skills, help me complete all `TODO(Lab 3)` tasks in `starter/sql/01_path_a_schematized.sql`, `starter/sql/03_indexes_fts_vector_postload.sql`, `starter/pipelines/neo4j_to_spanner_loader.py`, and `starter/pipelines/unstructured_graphrag_ingest.py`. Enforce `INV-06` (no self-ref dual cascade), `INV-08` (`ARRAY<FLOAT32>(vector_length=>768)` + `WHERE embedding IS NOT NULL`), and `< 80,000` mutations/commit. Do not edit `solution/`."*
-
-### Verify Lab 3 Offline
-
-```bash
-# Track B (Full: SQL DDL/Indexes + both Python loaders)
-make TRACK=starter verify-lab LAB=3
-
-# Track A (4-Hour Express: SQL DDL/Indexes 01 & 03 only)
 make TRACK=starter MODE=express verify-lab LAB=3
 ```
 
-**Checkpoint Expected Output:** `[PASS] Lab 3 (starter/)` — all 4 SQL & Python loader checks green!
+### Step 3: Implement the Path A loader in `starter/pipelines/neo4j_to_spanner_loader.py` (Track B — skip on Track A)
+
+Skip Steps 3 and 4 if you're on Track A Express.
+
+1. Open [`starter/pipelines/neo4j_to_spanner_loader.py`](../starter/pipelines/neo4j_to_spanner_loader.py) and jump to `load_graph()` (`L377`, `TODO` at `L389`, stub `L439`).
+2. Iterate through `NODE_LOAD_SPECS` first (`Owners -> Services -> Apis -> Adrs -> Requirements`, 68 rows) using `read_and_validate_table()` so `known_pks` collects every parent primary key before any edge loads.
+3. Iterate through `EXPLICIT_EDGE_LOAD_SPECS` second (174 rows across 6 edge tables), validating foreign keys against `known_pks`.
+4. Use `compute_safe_batch_size(batch_size, len(col_names))` and `chunk_rows()` (500 rows/commit default) so every commit stays well under Spanner's 80,000 mutations/commit limit. Keep `google.cloud.spanner` lazily imported inside `if not dry_run:` so `--dry-run` works with Python's stdlib alone.
+5. Test immediately:
+   ```bash
+   python3 starter/pipelines/neo4j_to_spanner_loader.py --dry-run
+   ```
+
+### Step 4: Implement Path B chunking & extraction in `starter/pipelines/unstructured_graphrag_ingest.py` (Track B — skip on Track A)
+
+1. Open [`starter/pipelines/unstructured_graphrag_ingest.py`](../starter/pipelines/unstructured_graphrag_ingest.py) and jump to `extract_chunks_and_mentions()` (`L224`, `TODO` at `L233`, stub `L268`).
+2. Discover all 45 `.md` files under `unstructured_dir`, load valid entity IDs with `load_canonical_entity_ids()`, split each file by H2 (`## `) sections (handling `owners/team_charters.md` and long sections via `_split_oversized_section()`), and build the `DocumentChunks` rows.
+3. Run every regex in `ENTITY_MENTION_PATTERNS` (`api-*`, `svc-*`, `ADR-*`, `REQ-*`, `team-*`) over each chunk, filter against canonical IDs, and emit deduplicated `ChunkEntityMentions` dicts. The provided `generate_vertex_embeddings()` helper handles 768-dim `FLOAT32` embeddings against Singapore (`asia-southeast1`) Vertex AI while blocking `global`.
+4. Test immediately:
+   ```bash
+   python3 starter/pipelines/unstructured_graphrag_ingest.py --dry-run
+   ```
+   You can also run `make dry-run-pipelines` to dry-run the full end-to-end reference pipeline chain offline (and `bash solution/pipelines/dataflow_migration.sh --dry-run` to preview the Bangkok `asia-southeast3` Dataflow bulk-load job for larger datasets).
+
+*(Optional Antigravity prompt for Steps 3–4)*:
+> "Help me implement `load_graph()` in `starter/pipelines/neo4j_to_spanner_loader.py` and `extract_chunks_and_mentions()` in `starter/pipelines/unstructured_graphrag_ingest.py` so both `--dry-run` commands pass with Python stdlib only."
+
+### Step 5 (Optional — Live Bangkok GCP): Provision, load, and build post-load indexes
+
+Finish Steps 1–4 and pass `verify-lab LAB=3` first, then deploy **your** `starter/` files to Bangkok (`regional-asia-southeast3`). Vertex AI embeddings call Singapore (`asia-southeast1`) automatically because `gemini-embedding-001` isn't hosted in Bangkok.
+
+```bash
+# 1. Create the 100-PU Bangkok sandbox and apply your starter/sql/01_path_a_schematized.sql
+#    (--skip-fgac defers Lab 6's 04_fgac_roles_views.sql until Lab 6)
+bash scripts/provision_workshop_env.sh create --track starter --skip-fgac
+
+# 2. Load Path A (nodes -> edges) and Path B (45 Markdown docs + Singapore Vertex AI embeddings)
+#    (Track A shortcut: use solution/pipelines/*.py instead of starter/pipelines/*.py)
+python3 starter/pipelines/neo4j_to_spanner_loader.py
+python3 starter/pipelines/unstructured_graphrag_ingest.py
+
+# 3. Run 4-stage post-load (03a synonyms -> 03b asia-southeast1 model -> your starter/sql/03 indexes -> ANALYZE)
+#    Takes ~10 min on 100 PU — start this right before the morning break!
+bash scripts/provision_workshop_env.sh apply-postload --track starter
+```
+
+*(Short on time? Run `make provision-gcp TRACK=solution`, then the two `solution/pipelines/*.py` loaders and `bash scripts/provision_workshop_env.sh apply-postload --track solution`. Once Lab 6's `04_fgac_roles_views.sql` is solved, `make provision-gcp TRACK=starter` also works without `--skip-fgac`.)*
 
 ---
 
-**Navigation:** [← Module 2: Two-Path SDLC Convergence](02_two_path_sdlc_workshop.md) | [README](../README.md) | [Module 4: Search Strategy Options →](04_search_strategy_options.md)
+## Verify This Lab
+
+```bash
+# Track B (Full — checks SQL 01 & 03 + both Python loaders via --dry-run)
+make TRACK=starter verify-lab LAB=3
+
+# Track A (Express — checks SQL 01 & 03 only)
+make TRACK=starter MODE=express verify-lab LAB=3
+```
+
+Passing output looks like this:
+
+```text
+[PASS] Lab 3 (starter/, mode=full)
+    + Verified core DDL & SdlcGraph in starter/sql/01_path_a_schematized.sql
+    + Verified post-load covering/FTS/ScaNN indexes in starter/sql/03_indexes_fts_vector_postload.sql
+    + starter/pipelines/neo4j_to_spanner_loader.py --dry-run succeeded
+    + starter/pipelines/unstructured_graphrag_ingest.py --dry-run succeeded
+[OK] Verified 1/1 lab(s) on track=starter (mode=full).
+```
+
+**If it fails, check:**
+- **Dual-cascade error (`INV-06`):** `ServiceDependsOnService` must *not* include `INTERLEAVE IN PARENT Services`; define it as a standalone table with two cascading FKs.
+- **Missing ScaNN predicate (`INV-08`):** `IdxDocumentChunksEmbedding` must include `WHERE embedding IS NOT NULL`.
+- **Loader `--dry-run` `ImportError`:** Keep `from google.cloud import spanner` inside `if not dry_run:` so offline verification runs without external packages.
+
+---
+
+**Previous / Next:** [← Lab 2: Two-Path SDLC Corpus & Regional Setup](02_two_path_sdlc_workshop.md) | [Starter Checklist](../starter/README.md) | [Lab 4: Search Strategies & Graph Algorithms →](04_search_strategy_options.md)

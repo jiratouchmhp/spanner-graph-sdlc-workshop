@@ -301,6 +301,110 @@ class TestDocsConsistency(unittest.TestCase):
                     f"{rel} invokes undefined Makefile target 'make {target}'",
                 )
 
+    def test_every_lab_doc_explicitly_links_all_starter_files_and_step_by_step_sections(self) -> None:
+        """Every Lab 1..8 doc has top summary, Step 1, clickable starter links; Lab 8 teardown is last; starter/README links all 15+8."""
+        labs = self.spec["labs"]
+        self.assertEqual([lab["lab"] for lab in labs], list(range(1, 9)))
+
+        # 1. Every Lab 1..8 doc has '## What You'll Work On' in first 50 lines, '### Step 1:', and links all starter_files
+        for lab in labs:
+            doc_rel = lab["doc"]
+            doc_text = self.texts[doc_rel]
+            first_50_lines = "\n".join(doc_text.splitlines()[:50])
+            self.assertIn(
+                "## What You'll Work On",
+                first_50_lines,
+                f"{doc_rel} (Lab {lab['lab']}) missing '## What You'll Work On' in first 50 lines",
+            )
+            self.assertIn(
+                "### Step 1:",
+                doc_text,
+                f"{doc_rel} (Lab {lab['lab']}) missing '### Step 1:'",
+            )
+            self.assertTrue(
+                lab["starter_files"],
+                f"Lab {lab['lab']} has no starter_files defined in WORKSHOP_SPEC.json",
+            )
+            cleaned_doc = _strip_fenced_code(doc_text)
+            for starter_file in lab["starter_files"]:
+                expected_link = f"(../{starter_file})"
+                self.assertIn(
+                    expected_link,
+                    cleaned_doc,
+                    f"{doc_rel} (Lab {lab['lab']}) missing clickable Markdown link {expected_link}",
+                )
+
+        # 2. Lab 8 teardown (`make cleanup-all-gcp`) appears strictly after '### Step 1:' and the Lab 8 starter SQL file
+        doc08 = self.texts["docs/08_observability_and_troubleshooting.md"]
+        step1_idx = doc08.find("### Step 1:")
+        starter_idx = doc08.find("starter/sql/11_observability_and_studio_viz.sql")
+        cleanup_idx = doc08.find("make cleanup-all-gcp")
+        self.assertNotEqual(step1_idx, -1, "docs/08_observability_and_troubleshooting.md missing '### Step 1:'")
+        self.assertNotEqual(
+            starter_idx,
+            -1,
+            "docs/08_observability_and_troubleshooting.md missing 'starter/sql/11_observability_and_studio_viz.sql'",
+        )
+        self.assertNotEqual(
+            cleanup_idx,
+            -1,
+            "docs/08_observability_and_troubleshooting.md missing 'make cleanup-all-gcp'",
+        )
+        self.assertGreater(
+            cleanup_idx,
+            step1_idx,
+            "Lab 8 'make cleanup-all-gcp' must appear strictly after '### Step 1:'",
+        )
+        self.assertGreater(
+            cleanup_idx,
+            starter_idx,
+            "Lab 8 'make cleanup-all-gcp' must appear strictly after 'starter/sql/11_observability_and_studio_viz.sql'",
+        )
+
+        # 3. starter/README.md has zero broken local links and links all 15 starter exercises and all 8 lab docs
+        starter_readme_path = REPO_ROOT / "starter" / "README.md"
+        self.assertTrue(starter_readme_path.is_file(), "Missing starter/README.md")
+        starter_readme_text = starter_readme_path.read_text(encoding="utf-8")
+        cleaned_starter_readme = _strip_fenced_code(starter_readme_text)
+
+        local_link_targets: set[str] = set()
+        for match in LINK_RE.finditer(cleaned_starter_readme):
+            href = match.group(1).strip()
+            if href.startswith(("http://", "https://", "mailto:", "#")):
+                continue
+            target = href.split("#", 1)[0].split("?", 1)[0].strip()
+            if not target:
+                continue
+            local_link_targets.add(target)
+            resolved = (starter_readme_path.parent / target).resolve()
+            self.assertTrue(
+                resolved.exists(),
+                f"Broken local link {href!r} in starter/README.md (resolved to {resolved})",
+            )
+
+        starter_exercises = self.spec["starter_exercises"]
+        self.assertEqual(len(starter_exercises), 15)
+        for exercise in starter_exercises:
+            exercise_file = exercise["file"]
+            self.assertTrue(
+                exercise_file.startswith("starter/"),
+                f"Unexpected starter_exercises path: {exercise_file!r}",
+            )
+            rel_in_starter = exercise_file.removeprefix("starter/")
+            self.assertIn(
+                rel_in_starter,
+                local_link_targets,
+                f"starter/README.md missing clickable link to starter exercise '{rel_in_starter}'",
+            )
+
+        for lab in labs:
+            expected_doc_target = f"../{lab['doc']}"
+            self.assertIn(
+                expected_doc_target,
+                local_link_targets,
+                f"starter/README.md missing clickable link to lab doc '{expected_doc_target}'",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

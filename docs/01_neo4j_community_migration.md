@@ -1,145 +1,151 @@
-# Module 1: Migrating Neo4j Community Edition to Cloud Spanner Graph Enterprise
+# Lab 1: Migrating Neo4j Community Edition to Spanner Graph
 
-**Customer Requirement 1:** Migrate an existing **Neo4j Community Edition** SDLC knowledge graph to **Cloud Spanner Enterprise** without JVM heap OOMs during export, referential-integrity failures during bulk load, or silent query regressions when translating **openCypher v9** to **ISO GQL (`ISO/IEC 39075`)**.
+In this lab, you'll run a local Neo4j Community Edition + APOC export simulation (no Docker needed) and translate 5 real openCypher queries into Cloud Spanner ISO GQL (`ISO/IEC 39075`). By the end, you'll have a verified [`starter/sql/09_opencypher_to_gql_cookbook.sql`](../starter/sql/09_opencypher_to_gql_cookbook.sql) ready to run against your Bangkok (`asia-southeast3`) Cloud Spanner Enterprise database.
 
-- **Duration:** Track A (4h Express): `30 min` | Track B (8h Deep-Dive): `60 min`
-- **Primary Antigravity Skill:** [`spanner-migration-and-neo4j-playbook`](../.agents/skills/spanner-migration-and-neo4j-playbook/SKILL.md)
-- **Support Skills:** [`spanner-graph-modeling-and-gql`](../.agents/skills/spanner-graph-modeling-and-gql/SKILL.md), [`sdlc-graphrag-workshop-guide`](../.agents/skills/sdlc-graphrag-workshop-guide/SKILL.md)
-- **Hands-On Starter File:** [`starter/sql/09_opencypher_to_gql_cookbook.sql`](../starter/sql/09_opencypher_to_gql_cookbook.sql) (`TODO(Lab 1)`)
-- **Reference Solution:** [`solution/sql/09_opencypher_to_gql_cookbook.sql`](../solution/sql/09_opencypher_to_gql_cookbook.sql), [`data/structured/no_docker_neo4j_sim.py`](../data/structured/no_docker_neo4j_sim.py), [`data/structured/`](../data/structured/README.md)
+## What You'll Work On
 
-> **Zero-Docker vs. With-Docker Path:** Docker Desktop is **100% optional**! Run `make preflight && make lab1-no-docker` right away for the full in-memory Neo4j CE + APOC streaming export simulation (`< 2s`, pure Python stdlib, 15/15 SHA-256 APOC parity). Use **Section 3B (Optional With-Docker)** only if you have Docker Desktop and want to run a live Neo4j 5 CE container.
+| Step | File to open (`starter/`) | Where to edit (`TODO` / line) | Track |
+| :-: | :--- | :--- | :-: |
+| 1 | No file edits — runs [`data/structured/no_docker_neo4j_sim.py`](../data/structured/no_docker_neo4j_sim.py) | Terminal command (`make lab1-no-docker`) | Track A & B |
+| 2 | [`starter/sql/09_opencypher_to_gql_cookbook.sql`](../starter/sql/09_opencypher_to_gql_cookbook.sql) | Exercises 1–3 (`L34`, `L51`, `L68`) | Track A & B |
+| 3 | [`starter/sql/09_opencypher_to_gql_cookbook.sql`](../starter/sql/09_opencypher_to_gql_cookbook.sql) | Exercises 4–5 (`L88`, `L107`) | Track B (optional on Track A) |
+
+- **Estimated time:** ~30 min (Track A Express) / ~60 min (Track B Full)
+- **Reference copy (read-only if stuck):** [`solution/sql/09_opencypher_to_gql_cookbook.sql`](../solution/sql/09_opencypher_to_gql_cookbook.sql)
+- **Antigravity skill:** [`spanner-migration-and-neo4j-playbook`](../.agents/skills/spanner-migration-and-neo4j-playbook/SKILL.md) (support: [`spanner-graph-modeling-and-gql`](../.agents/skills/spanner-graph-modeling-and-gql/SKILL.md), [`sdlc-graphrag-workshop-guide`](../.agents/skills/sdlc-graphrag-workshop-guide/SKILL.md))
 
 ---
 
-## 1. Why Enterprises Outgrow Neo4j Community Edition
+## Quick Background
 
-Neo4j Community Edition (CE) is popular for early internal SDLC catalogs, but production platform teams quickly hit architectural ceilings:
+Neo4j Community Edition works well for a small catalog, but production teams run into hard limits: single-node availability, one JVM heap, no built-in RBAC, and separate clusters for keyword and vector search. Moving to Cloud Spanner Enterprise in Bangkok (`regional-asia-southeast3`) puts graph, relational, full-text, and vector workloads in a single database with 3-zone synchronous HA (99.99% SLA), same-region backups, and ACID transactions.
 
-| Capability | Neo4j Community Edition | Cloud Spanner Enterprise (Bangkok `regional-asia-southeast3`) |
+A typical migration follows 7 stages: assess the source graph -> stream-export with APOC (`batchSize: 5000`, `separateHeader: true`, projecting business IDs instead of Neo4j's ephemeral `id(n)`) -> deploy base tables with zero secondary indexes -> bulk-load nodes before edges -> build indexes -> run count/hash parity checks -> shadow-read and cut over.
+
+The biggest query gotchas when translating openCypher v9 to Spanner ISO GQL:
+
+| Neo4j openCypher v9 | Cloud Spanner ISO GQL | Why it matters |
 | :--- | :--- | :--- |
-| **High Availability & SLA** | Single-node only (no clustering, no automated failover) | 3-zone synchronous quorum (`asia-southeast3-a/b/c`), **99.99% SLA** |
-| **Scale-Out & Memory** | Single JVM heap & vertical scaling ceiling | Horizontal split-based scale-out (up to 10 TiB/node, Managed Autoscaler) |
-| **Security & RBAC** | No role-based access control (RBAC) in CE | IAM + SQL Fine-Grained Access Control (FGAC) + CMEK + VPC-SC + Audit Logs |
-| **Multi-Model Consolidation** | Graph only — requires separate Vector DB & OpenSearch/ES | Unified Graph (ISO GQL) + Relational + Full-Text Search + ScaNN Vector Search in **one ACID commit** |
-| **Backup & PITR** | Offline dumps only | Online same-region Bangkok backups, **7-day PITR**, 3-zone synchronous replication (`$0.00/GiB` intra-region) |
+| `MATCH (u)-[r:DEPENDS_ON*1..3]->(t)` | `MATCH TRAIL (u)-[deps:DEPENDS_ON]->{1,3}(t)` | Spanner defaults to `WALK` (repeating edges on cycles like `svc-orders <-> svc-notifications`); `TRAIL` matches Neo4j edge-uniqueness. |
+| `UNWIND [...] AS sid MATCH (s {service_id: sid})` | `LET arr = [...] FOR sid IN arr MATCH (s:Service) WHERE s.service_id = sid` | ISO GQL replaces `UNWIND` with `FOR`, and scalar `LET`/`FOR` variables must go in outer `WHERE`, not inline `{...}`. |
+| `RETURN s` | `RETURN SAFE_TO_JSON(s) AS service_node_json` | Raw `GRAPH_ELEMENT` returns fail, and `TO_JSON` errors on `TOKENLIST` columns; `SAFE_TO_JSON` maps them to JSON `null`. |
+| `RETURN ... ORDER BY ... SKIP 2 LIMIT 5` | `RETURN ... ORDER BY ... OFFSET 2 LIMIT 5` | Attach `ORDER BY` to `RETURN`, put `OFFSET` *before* `LIMIT` (opposite of SQL), and alias every expression with `AS`. |
+| `OPTIONAL MATCH ... WHERE ...` | Keep `WHERE` on `OPTIONAL MATCH` (never post-join `FILTER`) | A trailing `FILTER` runs after the join and turns a left join into an inner join, dropping unmatched rows. |
+
+*(Note: Spanner ISO GQL is read-only. For writes like Cypher `MERGE` or `SET`, run standard GoogleSQL DML such as `INSERT OR UPDATE ... THEN RETURN` against the backing tables.)*
 
 ---
 
-## 2. The 4-Phase Neo4j CE → Spanner Graph Migration Playbook
+## Step-by-Step Hands-On
 
-1. **Phase 1 — Heap-Safe APOC Streaming Export (Never Export `id(n)`):**  
-   Neo4j's internal integer `id(n)` is ephemeral and recycled after deletions. Always project stable business primary keys (`owner_id`, `service_id`, `api_id`, `adr_id`, `req_id`) via `apoc.export.csv.query` with `{ batchSize: 5000, separateHeader: true, quotes: "ifNeeded", stream: false }`. `separateHeader: true` produces headerless data CSVs compatible directly with Cloud Spanner's Dataflow `GCS_Text_to_Cloud_Spanner` template.
-2. **Phase 2 — Relational & Dual-Projected Target Design:**  
-   Separate **5 static node tables** (`Owners`, `Services`, `Apis`, `Adrs`, `Requirements` = `68` rows), **6 explicit M:N edge tables** (`174` rows), and **4 folded N:1 FK columns** (`60` dual-projected edges = `234` total logical edges).
-3. **Phase 3 — Strict Nodes-Before-Edges Bulk Load (Zero Indexes Pre-Load):**  
-   Load **all 5 node tables** to completion first (`Owners -> Services -> Apis -> Adrs -> Requirements`), then load **all 6 explicit edge tables** second so interleaved parents and foreign keys exist. Create secondary, FTS, and ScaNN indexes **after** bulk loading (Module 3).
-4. **Phase 4 — 4-Tier Parity Validation & openCypher → ISO GQL Translation:**  
-   Validate global counts, per-label/edge counts, topological traps, and deterministic per-table `SHA256` / `BIT_XOR(FARM_FINGERPRINT(...))` row hashes (`solution/sql/10_validate_migration_parity.sql`).
+### Step 1: Run the Zero-Docker Neo4j & APOC export simulator (Track A & B)
 
----
-
-## 3. Hands-On Neo4j CE & APOC Streaming Export Walkthrough
-
-### Path A (Default — Zero-Docker Neo4j CE & APOC Simulator)
-
-No Docker Desktop required! Run the pure-stdlib **Zero-Docker Neo4j CE & APOC Streaming Simulator** (`data/structured/no_docker_neo4j_sim.py`) directly from the repository root to experience all 4 migration proof points in under 2 seconds:
+You don't need Docker Desktop for this lab. From the repo root, run the preflight check and the pure-Python simulator:
 
 ```bash
-# 1. Confirm your workstation is ready (Python 3.10+, regional defaults, Zero-Docker confirmed)
-make preflight
-
-# 2. Run the full 4-section Zero-Docker Neo4j CE & APOC simulator + Lab 1 parity check
-make lab1-no-docker
+make preflight && make lab1-no-docker
 ```
 
-What `make lab1-no-docker` executes live in your terminal:
-1. **Source Graph & Topological Traps:** Loads all `68` nodes + `174` explicit M:N + `60` dual-projected N:1 = `234` edges with uniqueness constraints (`svc-auth` hub in-degree `10`, `svc-analytics` `DATA_FEED`, `svc-billing -> api-payments-charge-v1` legacy `AT_RISK`, `svc-orders <-> svc-notifications` cycle).
-2. **`WALK` vs. `TRAIL` Cycle Explosion Demo:** Compares default ISO GQL `WALK` against edge-unique `MATCH TRAIL` upstream from `svc-checkout` across depths 1–10.
-3. **Hero Blast-Radius & Trap Comparisons:** Replays the deterministic 7-row `api-payments-charge-v2` blast radius and contrasts `OPTIONAL MATCH ... WHERE` against post-join `FILTER`.
-4. **Heap-Safe Streaming APOC Export & SHA-256 Parity:** Contrasts naive `collect(x)` JVM heap OOM pressure vs `{ batchSize: 5000, separateHeader: true }`, writes headerless CSVs to a temp dir, and diffs against canonical CSVs via `stage_apoc_export.py --diff-apoc-dir` (**15/15 SHA-256 byte-for-byte parity**).
+Here's what the simulator runs in under 2 seconds:
+1. Loads the Acme Commerce source graph (`68` nodes, `174` explicit M:N edges, and `60` dual-projected N:1 edges = `234` logical edges).
+2. Compares default `WALK` against `MATCH TRAIL` upstream from `svc-checkout` so you can see the `svc-orders <-> svc-notifications` cycle blow up under `WALK`.
+3. Replays the `api-payments-charge-v2` blast radius and contrasts `OPTIONAL MATCH ... WHERE` against post-join `FILTER`.
+4. Streams headerless APOC CSVs (`separateHeader: true`) and checks SHA-256 parity against the canonical exports (`15/15` match).
 
-Explore individual simulator queries or stage headerless CSVs anytime:
+You can also inspect individual queries directly:
 
 ```bash
 python3 data/structured/no_docker_neo4j_sim.py --list-queries
 python3 data/structured/no_docker_neo4j_sim.py --query walk_vs_trail
-python3 data/structured/no_docker_neo4j_sim.py --export-dir /tmp/acme-apoc-export --diff
-python3 data/structured/stage_apoc_export.py
 ```
 
-### Path B (Optional With-Docker — Live Local Neo4j 5 CE Container)
+<details>
+<summary>Optional (Track B with Docker): Run a real local Neo4j 5 CE container</summary>
 
-If you have Docker Desktop installed on Track B (8-hour deep-dive) and want to run the real Neo4j 5 CE container alongside the simulator:
+If you have Docker Desktop installed and want to seed and export from an actual Neo4j 5 CE container using [`data/structured/docker-compose.yml`](../data/structured/docker-compose.yml):
 
 ```bash
 cd data/structured
-
-# 1. Start Neo4j 5 Community Edition with APOC enabled and bounded 1G heap
 docker compose up -d
-
-# 2. Seed all 68 nodes and 234 relationships idempotently
-docker compose exec -T neo4j \
-  cypher-shell -u neo4j -p acme-sdlc-workshop-2026 < seed_neo4j.cypher
-
-# 3. Export headerless CSVs (separateHeader: true) + JSONL snapshot into ./export/
-docker compose exec -T neo4j \
-  cypher-shell -u neo4j -p acme-sdlc-workshop-2026 < export_neo4j_apoc.cypher
-
-# 4. Validate referential integrity & diff the APOC export against canonical CSVs
+docker compose exec -T neo4j cypher-shell -u neo4j -p acme-sdlc-workshop-2026 < seed_neo4j.cypher
+docker compose exec -T neo4j cypher-shell -u neo4j -p acme-sdlc-workshop-2026 < export_neo4j_apoc.cypher
 python3 stage_apoc_export.py --diff-apoc-dir ./export
 ```
 
----
+</details>
 
-## 4. High-Frequency openCypher v9 → Cloud Spanner ISO GQL Traps
+### Step 2: Complete Exercises 1–3 in `starter/sql/09_opencypher_to_gql_cookbook.sql` (Track A & B)
 
-Translating Neo4j queries naively causes subtle runtime errors or silent semantic bugs. Master these **7 critical differences** (all 10 full translations live in `solution/sql/09_opencypher_to_gql_cookbook.sql`):
+Open [`starter/sql/09_opencypher_to_gql_cookbook.sql`](../starter/sql/09_opencypher_to_gql_cookbook.sql). Every query starts with `GRAPH SdlcGraph`.
 
-| # | Neo4j openCypher v9 Pattern | Cloud Spanner ISO GQL Equivalent | Critical Trap Avoided |
-| :-: | :--- | :--- | :--- |
-| **1** | `MATCH (u)-[r:DEPENDS_ON*1..3]->(t)` | `MATCH TRAIL (u)-[deps:DEPENDS_ON]->{1,3}(t)` | **Cycle explosion!** Spanner GQL defaults to `WALK` (repeating edges on `svc-orders <-> svc-notifications`). `MATCH TRAIL` matches Neo4j edge-uniqueness. |
-| **2** | `UNWIND ['svc-payments', ...] AS sid` + `{service_id: sid}` | `LET arr = [...] FOR sid IN arr MATCH (s:Service) WHERE s.service_id = sid` | `UNWIND` doesn't exist in ISO GQL; scalar `FOR`/`LET` vars must filter inside outer `WHERE`, **never** inside inline `{service_id: sid}`! |
-| **3** | `RETURN s` (whole node/edge/path) | `RETURN SAFE_TO_JSON(s) AS service_node_json` | Returning raw `GRAPH_ELEMENT` fails; `SAFE_TO_JSON` handles `TOKENLIST` columns safely as JSON `null` (whereas `TO_JSON` errors on `TOKENLIST`). |
-| **4** | `RETURN ... ORDER BY ... SKIP 2 LIMIT 5` | `RETURN ... ORDER BY ... OFFSET 2 LIMIT 5` | Standalone `ORDER BY` before `RETURN` is silently ignored; **`OFFSET` must precede `LIMIT`**; every expression requires an explicit `AS` alias. |
-| **5** | `OPTIONAL MATCH (s)-[c]->(a) WHERE c.migration_status = 'AT_RISK'` | Keep `WHERE` attached to `OPTIONAL MATCH` (never post-join `FILTER`) | Writing `FILTER` after `OPTIONAL MATCH` turns the `LEFT OUTER JOIN` into an `INNER JOIN`, silently dropping unmatched services! |
-| **6** | `size((s)<-[:DEPENDS_ON]-())` | `VALUE { MATCH (inner_s:Service)<-[:DEPENDS_ON]-(:Service) WHERE inner_s = s RETURN COUNT(*) }` | Never redeclare outer variable `s` inside a GQL subquery; bind fresh `inner_s` and correlate with `WHERE inner_s = s`. |
-| **7** | `MERGE (a:Adr {adr_id: 'ADR-011'}) SET ... RETURN ...` | `INSERT OR UPDATE INTO Adrs (...) VALUES (...) THEN RETURN ...` | ISO GQL in Spanner is read-only; mutate backing tables via ACID GoogleSQL DML (`INSERT OR UPDATE`, `UPDATE ... WHERE pk IN { GRAPH ... } THEN RETURN`). |
+1. **Exercise 1 — Cycle-safe upstream impact (`L34`):**
+   Replace the `TODO(Lab 1)` block with a `MATCH TRAIL` query traversing `DEPENDS_ON` 1 to 3 hops upstream into `target:Service {service_id: 'svc-checkout'}`. Return `DISTINCT upstream.service_id AS upstream_service_id` and `ARRAY_LENGTH(deps) AS hops`, ordered by `hops ASC, upstream_service_id ASC`.
+2. **Exercise 2 — Unnesting arrays (`L51`):**
+   Replace the `TODO(Lab 1)` block using `LET target_services = ['svc-payments', 'svc-auth', 'svc-ledger']` and `FOR sid IN target_services`. Match `(s:Service)-[:EXPOSES]->(a:Api)` and filter with an outer `WHERE s.service_id = sid` clause (not inline inside `{...}`).
+3. **Exercise 3 — Returning whole nodes safely (`L68`):**
+   Replace the `TODO(Lab 1)` block to match `TIER_0` services and return `s.service_id AS service_id` plus `SAFE_TO_JSON(s) AS service_node_json`, ordered by `service_id ASC` with `LIMIT 5`.
 
----
+*(Optional Antigravity prompt)*:
+> "Can you walk me through Exercises 1–3 in `starter/sql/09_opencypher_to_gql_cookbook.sql` using the `spanner-migration-and-neo4j-playbook` skill? Show me the `MATCH TRAIL`, `FOR`, and `SAFE_TO_JSON` queries against `SdlcGraph` without touching `solution/`."
 
-## 5. Hands-On Exercise — Lab 1 (`starter/`)
-
-Open [`starter/sql/09_opencypher_to_gql_cookbook.sql`](../starter/sql/09_opencypher_to_gql_cookbook.sql). You will find `TODO(Lab 1)` blocks for the 5 highest-impact Neo4j → Spanner ISO GQL translations:
-
-1. **Cycle-safe upstream traversal (`MATCH TRAIL`)** targeting `svc-checkout` over `svc-orders <-> svc-notifications` (using `ARRAY_LENGTH(deps)`).
-2. **Array unnesting (`FOR sid IN target_services`)** replacing `UNWIND` with an outer `WHERE s.service_id = sid` predicate.
-3. **Whole-node serialization (`SAFE_TO_JSON(s)`)** returning `TIER_0` services safely with `TOKENLIST` columns.
-4. **Pagination & aliasing (`RETURN ... ORDER BY ... OFFSET 2 LIMIT 5`)** with `UPPER(a.http_method) AS method_upper`.
-5. **Preserving `LEFT OUTER JOIN` semantics (`OPTIONAL MATCH ... WHERE c.migration_status = 'AT_RISK'`)** so services with zero legacy calls stay in the result set.
-
-### Antigravity IDE Prompt (Copy-Paste)
-
-> *"Using the `spanner-migration-and-neo4j-playbook` skill, help me complete all `TODO(Lab 1)` openCypher-to-ISO-GQL translations in `starter/sql/09_opencypher_to_gql_cookbook.sql` against `SdlcGraph`. Explain how `MATCH TRAIL` avoids the `svc-orders <-> svc-notifications` cycle and why `OPTIONAL MATCH ... WHERE` differs from post-join `FILTER`. Do not edit `solution/`."*
-
-### Verify Lab 1 Offline
+Quick check (Track A Express scope):
 
 ```bash
-# Track B (8h Deep-Dive, default MODE=full): verify all 5 ISO GQL queries + APOC parity
-make TRACK=starter verify-lab LAB=1
-
-# Track A (4h Express): verify core Exercises 1-3 (MATCH TRAIL, FOR, SAFE_TO_JSON)
 make TRACK=starter MODE=express verify-lab LAB=1
-
-# Run simulator + starter cookbook check together
-make TRACK=starter lab1-no-docker
-
-# Compare against the verified reference cookbook if stuck
-diff -u starter/sql/09_opencypher_to_gql_cookbook.sql solution/sql/09_opencypher_to_gql_cookbook.sql
 ```
 
-**Checkpoint Expected Output:** `[PASS] Lab 1 (starter/, mode=full)` (or `mode=express`) and `[OK] Verified 1/1 lab(s) on track=starter.`
+### Step 3: Complete Exercises 4–5 in `starter/sql/09_opencypher_to_gql_cookbook.sql` (Track B — optional on Track A)
+
+Skip this step if you're on Track A Express.
+
+1. **Exercise 4 — Pagination and aliasing (`L88`):**
+   Replace the `TODO(Lab 1)` block to match `(a:Api)` and return `a.api_id AS api_id`, `a.latency_budget_ms AS latency_budget_ms`, and `UPPER(a.http_method) AS method_upper`. Attach `ORDER BY latency_budget_ms ASC, api_id ASC`, then place `OFFSET 2` **before** `LIMIT 5`.
+2. **Exercise 5 — Preserving left-outer join semantics (`L107`):**
+   Replace the `TODO(Lab 1)` block to match all `(s:Service)` nodes, followed by `OPTIONAL MATCH (s)-[c:CALLS_API]->(a:Api) WHERE c.migration_status = 'AT_RISK'`. Return `service_id`, `a.api_id AS at_risk_api_id`, and `c.rps_estimate AS legacy_rps` ordered by `service_id ASC`. All 12 services stay in the result set, with only `svc-billing` showing its legacy `AT_RISK` call.
+
+*(Optional Antigravity prompt)*:
+> "Help me finish Exercises 4 and 5 in `starter/sql/09_opencypher_to_gql_cookbook.sql` — specifically `OFFSET` before `LIMIT` and keeping `WHERE` inside `OPTIONAL MATCH` so all 12 services stay in the output. Don't edit `solution/`."
+
+### Step 4 (Optional — Live Bangkok GCP): Execute your cookbook live
+
+Once you've provisioned and loaded your Bangkok (`asia-southeast3`) Spanner database in Lab 3, you can run your completed cookbook directly against Spanner:
+
+```bash
+# Run your starter/ cookbook live against Bangkok Spanner
+python3 scripts/run_live_sql.py 09 --track starter
+
+# Quick reference shortcut using solution/
+python3 scripts/run_live_sql.py 09 --track solution
+```
 
 ---
 
-**Navigation:** [← Module 0: Facilitator Guide](00_facilitator_guide.md) | [README](../README.md) | [Module 2: Two-Path SDLC Convergence →](02_two_path_sdlc_workshop.md)
+## Verify This Lab
+
+Run the offline lab verifier from the repository root:
+
+```bash
+# Track B (Full — verifies all 5 queries + APOC export parity)
+make TRACK=starter verify-lab LAB=1
+
+# Track A (Express — verifies Exercises 1–3 + APOC export parity)
+make TRACK=starter MODE=express verify-lab LAB=1
+```
+
+Passing output looks like this:
+
+```text
+[PASS] Lab 1 (starter/, mode=full)
+    + Verified all 5 ISO GQL translations in starter/sql/09_opencypher_to_gql_cookbook.sql
+    + Path A Neo4j APOC export staging & parity validated
+[OK] Verified 1/1 lab(s) on track=starter (mode=full).
+```
+
+**If it fails, check:**
+- **Leftover `TODO(Lab 1)` comments:** Delete or overwrite the `-- TODO(Lab 1)` marker lines in your active track's exercises; the verifier rejects any remaining markers.
+- **Commented-out SQL:** The verifier strips `--` comments before checking for `GRAPH SdlcGraph`, `MATCH TRAIL`, `FOR ... IN`, `SAFE_TO_JSON(`, `ORDER BY ... LIMIT`, and `OPTIONAL MATCH ... WHERE`.
+- **Stuck on syntax?** Compare your file side-by-side with the reference: `diff -u starter/sql/09_opencypher_to_gql_cookbook.sql solution/sql/09_opencypher_to_gql_cookbook.sql`.
+
+---
+
+**Previous / Next:** [← Facilitator Guide](00_facilitator_guide.md) | [Starter Checklist](../starter/README.md) | [Lab 2: Two-Path SDLC Corpus & Regional Setup →](02_two_path_sdlc_workshop.md)
